@@ -13,7 +13,8 @@ import 'fusion.dart';
 
 /// Lo que se vio en un cuadro.
 class Captura {
-  Captura(this.imagen, this.codigos, {this.info, this.ilegible = false, this.sinLeer = const []});
+  Captura(this.imagen, this.codigos,
+      {this.info, this.ilegible = false, this.sinLeer = const [], this.crudos = const []});
 
   /// Tamano de la imagen en vertical (las esquinas estan en este espacio).
   final Size imagen;
@@ -28,6 +29,10 @@ class Captura {
   /// Zonas (4 esquinas, en vertical) donde OpenCV ve un codigo que no se
   /// pudo leer: marca "acercate".
   final List<List<Offset>> sinLeer;
+
+  /// Todo lo leido en el cuadro, antes de la confirmacion de [Fusion] (el
+  /// conteo vota por su cuenta, caja por caja).
+  final List<CodigoVisto> crudos;
 }
 
 /// Camara nativa (CameraX) + motor de lectura propio (C++: zxing-cpp,
@@ -425,7 +430,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     }
     if (!_capturas.isClosed) {
       _capturas.add(Captura(tamVertical(sensor, giro), confirmados,
-          info: r.info, ilegible: r.info.ilegibles > 0, sinLeer: sinLeer));
+          info: r.info, ilegible: r.info.ilegibles > 0, sinLeer: sinLeer, crudos: codigos));
     }
   }
 

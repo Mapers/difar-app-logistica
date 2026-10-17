@@ -20,6 +20,7 @@ add_subdirectory(zxing-cpp/core zxing EXCLUDE_FROM_ALL)
 add_library(motor_lector SHARED
   "motor_lector.cpp"
   "preparar.cpp"
+  "ean_gris.cpp"
 )
 target_link_libraries(motor_lector PRIVATE ZXing::ZXing)
 

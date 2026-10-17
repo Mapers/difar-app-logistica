@@ -55,7 +55,8 @@ extern "C" {
 #define ML_PASO_ROTADO 7     // girado 45 grados (1D en angulo)
 #define ML_PASO_DETECTOR 8   // OpenCV ubico el codigo; recorte enderezado, sin preparar
 #define ML_PASO_DETECTOR_PREP 9 // idem, recorte con contraste ecualizado
-#define ML_PASOS 10
+#define ML_PASO_GRIS 10      // recorte de OpenCV leido en tonos de gris (EAN/UPC borroso o movido)
+#define ML_PASOS 11
 
 typedef struct {
   int32_t formato;      // uno de ML_* (0 si no esta en la lista)

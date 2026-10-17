@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../conteo/pantalla_conteo.dart';
 import '../core/proyeccion.dart';
 import '../core/registro.dart';
 import 'ajustes.dart';
@@ -11,7 +12,6 @@ import 'camara_lectora.dart';
 import 'fusion.dart';
 import 'pantalla_ajustes.dart';
 import 'pantalla_lista.dart';
-import 'pantalla_multi.dart';
 import 'sesion_lectura.dart';
 
 /// Pantalla principal, como SparkScan de Scandit: la lista ocupa la pantalla,
@@ -396,8 +396,8 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
         ),
         actions: [
           IconButton(
-            tooltip: 'Conteo multiple',
-            onPressed: () => _abrir(PantallaMulti(sesion: _sesion, ajustes: _ajustes)),
+            tooltip: 'Conteo (MatrixScan Count)',
+            onPressed: () => _abrir(PantallaConteo(sesion: _sesion, ajustes: _ajustes)),
             icon: const Icon(Icons.grid_view),
           ),
           PopupMenuButton<String>(

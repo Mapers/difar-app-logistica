@@ -77,6 +77,10 @@ class Fusion {
 
   static const ventana = Duration(milliseconds: 1500);
 
+  /// Se puede aceptar al primer cuadro: leido sobre la imagen original y con
+  /// digito de control.
+  static bool esDirecto(CodigoVisto c) => _pasosDirectos.contains(c.detalle) && !(c.simbologia?.sinControl ?? false);
+
   final _visto = <String, DateTime>{};
 
   /// Los retenidos en el ultimo cuadro (para el registro).

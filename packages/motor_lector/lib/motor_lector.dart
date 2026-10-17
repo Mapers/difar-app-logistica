@@ -64,7 +64,8 @@ enum PasoMotor {
   invertido('invertido'),
   rotado('rotado'),
   detector('detector'),
-  detectorPreparado('detector+contraste');
+  detectorPreparado('detector+contraste'),
+  gris('tonos de gris');
 
   const PasoMotor(this.nombre);
   final String nombre;
@@ -151,7 +152,7 @@ class ResultadoMotor {
 // ------------------------------------------------------------------ FFI
 
 const _maxSalida = 64;
-const _pasos = 10; // ML_PASOS
+const _pasos = 11; // ML_PASOS
 
 final class _MlCodigo extends Struct {
   @Int32()

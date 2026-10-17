@@ -1,5 +1,6 @@
 #include "motor_lector.h"
 #include "preparar.h"
+#include "ean_gris.h"
 #ifdef ML_CON_OPENCV
 #include "detector.h"
 #endif
@@ -92,16 +93,24 @@ struct Afin {
 };
 
 struct Lectura {
-  Barcode codigo;
-  int paso;
+  std::string texto;
+  BarcodeFormat formato = BarcodeFormat::None;
+  std::array<PointF, 4> pos{}; // esquinas en la imagen del paso
+  int paso = 0;
   Afin aEntrada;
-  bool invertido;
+  bool invertido = false;
   float cx = 0, cy = 0, largo = 0; // centro y lado mayor en la imagen de entrada
+
+  Lectura() = default;
+  Lectura(const Barcode& b, int paso, Afin t, bool inv)
+      : texto(b.text()), formato(b.format()), paso(paso), aEntrada(t), invertido(inv || b.isInverted()) {
+    for (int i = 0; i < 4; i++) pos[i] = PointF(b.position()[i]);
+  }
 };
 
 // Centro y lado mayor del codigo en la imagen de entrada.
 void medirEnEntrada(Lectura& l) {
-  const auto& pos = l.codigo.position();
+  const auto& pos = l.pos;
   float xs[4], ys[4];
   for (int i = 0; i < 4; i++) {
     xs[i] = l.aEntrada.a * pos[i].x + l.aEntrada.b * pos[i].y + l.aEntrada.tx;
@@ -116,6 +125,7 @@ void medirEnEntrada(Lectura& l) {
 
 struct Lector {
   BarcodeFormats formatos;
+  int32_t mascara = 0; // formatos pedidos (ML_*, 0 = todos)
   bool multiple = false; // todos los codigos (ML_MODO_TODOS)
   std::vector<Lectura> leidos;
   // Los pasos corren en paralelo: lo compartido va protegido.
@@ -145,7 +155,7 @@ struct Lector {
   // verificacion (se cuentan como ilegibles: hay codigo pero esta danado).
   // Devuelve cuantos codigos nuevos agrego.
   int leer(const ImageView& img, ReaderOptions o, int paso, Afin t = {}, bool invertido = false,
-           bool errores = false) {
+           bool errores = false, const std::function<bool(const Barcode&)>& validar = nullptr) {
     if (listo()) return 0;
     int nuevos = 0;
     o.setReturnErrors(errores);
@@ -157,23 +167,32 @@ struct Lector {
         continue;
       }
       if (!confiable(b)) continue;
-      // Cada codigo fisico cuenta: dos cajas con el mismo EAN son dos lecturas.
-      // Es "el mismo" solo si ademas esta en el mismo lugar (lo leyeron dos pasos).
-      Lectura nueva{std::move(b), paso, t, invertido};
-      medirEnEntrada(nueva);
-      const bool repetido = std::any_of(leidos.begin(), leidos.end(), [&](const Lectura& l) {
-        if (l.codigo.text() != nueva.codigo.text() || Symbology(l.codigo.format()) != Symbology(nueva.codigo.format()))
-          return false;
-        const float radio = 0.5f * std::max(l.largo, nueva.largo);
-        return std::hypot(l.cx - nueva.cx, l.cy - nueva.cy) < std::max(radio, 8.0f);
-      });
-      if (!repetido) {
-        leidos.push_back(std::move(nueva));
-        hayUno = true;
-        cuantos++;
-        nuevos++;
-      }
-    }    return nuevos;
+      if (validar && !validar(b)) continue;
+      nuevos += agregarSinCerrojo(Lectura(b, paso, t, invertido));
+    }
+    return nuevos;
+  }
+
+  // Lectura de otro decodificador (el de tonos de gris).
+  int agregar(Lectura nueva) {
+    std::lock_guard<std::mutex> l(cerrojo);
+    return agregarSinCerrojo(std::move(nueva));
+  }
+
+  int agregarSinCerrojo(Lectura nueva) {
+    // Cada codigo fisico cuenta: dos cajas con el mismo EAN son dos lecturas.
+    // Es "el mismo" solo si ademas esta en el mismo lugar (lo leyeron dos pasos).
+    medirEnEntrada(nueva);
+    const bool repetido = std::any_of(leidos.begin(), leidos.end(), [&](const Lectura& l) {
+      if (l.texto != nueva.texto || Symbology(l.formato) != Symbology(nueva.formato)) return false;
+      const float radio = 0.5f * std::max(l.largo, nueva.largo);
+      return std::hypot(l.cx - nueva.cx, l.cy - nueva.cy) < std::max(radio, 8.0f);
+    });
+    if (repetido) return 0;
+    leidos.push_back(std::move(nueva));
+    hayUno = true;
+    cuantos++;
+    return 1;
   }
 
   bool listo() const { return !multiple && hayUno.load(); }
@@ -303,10 +322,19 @@ struct Trabajo {
         auto eq = det::clahe(rec.img);
         auto o2 = lector.opciones(true, true);
         o2.setMaxNumberOfSymbols(1);
-        if (lector.leer(eq.vista(), o2, ML_PASO_DETECTOR_PREP, a) > 0) continue;
+        // Con contraste ecualizado zxing a veces "lee" un EAN que no es
+        // (banco: 0733900815114 de 7753608815714 movido): se descarta si sus
+        // digitos no calzan con los tonos de gris del recorte.
+        auto validar = [&](const Barcode& b) {
+          const auto f = b.format(); // (Symbology() junta EAN y UPC en una familia)
+          if (f != BarcodeFormat::EAN13 && f != BarcodeFormat::UPCA && f != BarcodeFormat::EAN8) return true;
+          return gris::verificarEan(rec.img, f == BarcodeFormat::UPCA ? "0" + b.text() : b.text()) >= 0;
+        };
+        if (lector.leer(eq.vista(), o2, ML_PASO_DETECTOR_PREP, a, false, false, validar) > 0) continue;
         if (lector.leer(prep::invertir(eq.px.data(), eq.ancho, eq.alto, eq.ancho).vista(), o2, ML_PASO_DETECTOR_PREP, a,
-                        true) > 0)
+                        true, false, validar) > 0)
           continue;
+        if (leerGris(rec, a)) continue;
         leidoK[k] = 0;
       }
     };
@@ -332,6 +360,33 @@ struct Trabajo {
     }
 #endif
   }
+
+#ifdef ML_CON_OPENCV
+  // EAN/UPC borroso o movido: el recorte se lee en tonos de gris.
+  bool leerGris(const det::Recorte& rec, const Afin& a) {
+    const int32_t m = lector.mascara;
+    const bool ean13 = m == 0 || (m & (ML_EAN13 | ML_UPCA)), ean8 = m == 0 || (m & ML_EAN8);
+    if (!ean13 && !ean8) return false;
+    const auto t0 = Reloj::now();
+    gris::Resultado g;
+    const bool ok = gris::leerEan(rec.img, ean13, ean8, g);
+    tiempos[ML_PASO_GRIS] += (int)std::chrono::duration_cast<std::chrono::microseconds>(Reloj::now() - t0).count();
+    if (!ok) return false;
+    Lectura l;
+    l.texto = g.texto;
+    l.formato = g.ean8 ? BarcodeFormat::EAN8 : BarcodeFormat::EAN13;
+    // Solo UPC-A pedido: un EAN-13 que empieza con 0 es un UPC-A.
+    if (!g.ean8 && m != 0 && !(m & ML_EAN13)) {
+      if (g.texto[0] != '0') return false;
+      l.texto = g.texto.substr(1);
+      l.formato = BarcodeFormat::UPCA;
+    }
+    l.pos = {PointF(g.x0, g.y0), PointF(g.x1, g.y0), PointF(g.x1, g.y1), PointF(g.x0, g.y1)};
+    l.paso = ML_PASO_GRIS;
+    l.aEntrada = a;
+    return lector.agregar(std::move(l)) > 0;
+  }
+#endif
 
   // Punto dentro de un cuadrilatero convexo (mismo lado de los 4 bordes).
   static bool dentro(const std::array<float, 8>& q, float x, float y) {
@@ -433,6 +488,7 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     info->regiones = -1;
 
     t->lector.formatos = aFormatosZx(formatos);
+    t->lector.mascara = formatos;
     t->lector.multiple = (modo & ML_MODO_TODOS) != 0;
     const bool completo = (modo & ML_MODO_CUADRO_COMPLETO) != 0;
     t->conTope = hilos <= 1 && presupuesto_us > 0;
@@ -546,17 +602,17 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
       if (escritos >= max_salida) break;
       ml_codigo& c = salida[escritos++];
       std::memset(&c, 0, sizeof(ml_codigo));
-      c.formato = aBit(lec.codigo.format());
+      c.formato = aBit(lec.formato);
       c.paso = lec.paso;
-      c.invertido = (lec.invertido || lec.codigo.isInverted()) ? 1 : 0;
-      const auto& pos = lec.codigo.position();
+      c.invertido = lec.invertido ? 1 : 0;
+      const auto& pos = lec.pos;
       const Afin& a = lec.aEntrada;
       for (int i = 0; i < 4; i++) {
         c.x[i] = (int32_t)(a.a * pos[i].x + a.b * pos[i].y + a.tx);
         c.y[i] = (int32_t)(a.c * pos[i].x + a.d * pos[i].y + a.ty);
       }
-      copiarTexto(c.nombre_formato, sizeof(c.nombre_formato), ToString(lec.codigo.format()));
-      copiarTexto(c.texto, sizeof(c.texto), lec.codigo.text());
+      copiarTexto(c.nombre_formato, sizeof(c.nombre_formato), ToString(lec.formato));
+      copiarTexto(c.texto, sizeof(c.texto), lec.texto);
     }
     for (const auto& q : sinLeer) {
       if (escritos >= max_salida) break;

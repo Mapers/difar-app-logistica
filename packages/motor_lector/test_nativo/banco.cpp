@@ -351,6 +351,81 @@ int main() {
     falsos += falsosV;
   }
 
+  // --- Imagen movida: EAN-13 con desenfoque de movimiento a lo ancho del
+  // codigo (lo peor: borronea las barras entre si), como al pasar el
+  // telefono rapido o con exposicion larga. Cuenta lo que lee zxing solo, el
+  // motor, y cuantas lecturas salieron del lector en tonos de gris.
+  {
+    const char* eans[] = {"775018200012", "775360881571", "205000061068", "775846700087", "750103131130"};
+    auto conVerificador = [](const std::string& d) {
+      int s = 0;
+      for (int i = 0; i < 12; i++) s += (d[i] - '0') * (i % 2 ? 3 : 1);
+      return d + (char)('0' + (10 - s % 10) % 10);
+    };
+    int okZx = 0, okMotor = 0, okGris = 0, casos = 0, falsosM = 0;
+    std::string tabla;
+    for (float escala : {0.8f, 1.0f, 1.3f}) {
+      tabla += "  escala " + std::to_string(escala).substr(0, 3) + " (" +
+               std::to_string(escala * 300 / 95).substr(0, 3) + " px/barra):";
+      for (int largo : {0, 3, 5, 7, 9, 11, 13, 15}) {
+        int zx = 0, mo = 0, gr = 0;
+        for (int e = 0; e < 5; e++) {
+          const Codigo c{"EAN-13", BarcodeFormat::EAN13, eans[e], conVerificador(eans[e]), 300, 140};
+          Img img = escena(c, escala);
+          if (largo > 0) {
+            Img t(img.size());
+            for (int y = 0; y < H; y++)
+              for (int x = 0; x < W; x++) {
+                float acum = 0;
+                int n = 0;
+                for (int d = -largo / 2; d <= largo / 2; d++) {
+                  const int xx = std::clamp(x + d, 0, W - 1);
+                  acum += img[y * W + xx];
+                  n++;
+                }
+                t[y * W + x] = acum / n;
+              }
+            img.swap(t);
+          }
+          ruido(img, 4, 11 + e);
+          const auto b = aBytes(img);
+          casos++;
+          const auto base = ReadBarcodes(ImageView(b.data(), W, H, ImageFormat::Lum), ReaderOptions().setFormats(BarcodeFormat::EAN13));
+          if (!base.empty() && base[0].text() == c.esperado) zx++;
+          ml_codigo sal[8];
+          ml_info info;
+          bool leido = false, deGris = false;
+          for (int cuadro = 0; cuadro < 2 && !leido; cuadro++) {
+            const int n = ml_leer(b.data(), W, H, W, ML_PIXEL_LUMA, 0, ML_MODO_TODOS, 0, cuadro, sal, 8, &info);
+            for (int k = 0; k < n; k++) {
+              if (sal[k].sin_leer) continue;
+              if (c.esperado == sal[k].texto) {
+                leido = true;
+                deGris = deGris || sal[k].paso == ML_PASO_GRIS;
+              } else {
+                std::printf("  LECTURA FALSA (movido %d px): '%s' en vez de %s, paso %d\n", largo, sal[k].texto,
+                            c.esperado.c_str(), sal[k].paso);
+                falsosM++;
+              }
+            }
+          }
+          mo += leido;
+          gr += deGris;
+        }
+        okZx += zx;
+        okMotor += mo;
+        okGris += gr;
+        tabla += "  " + std::to_string(largo) + "px:" + std::to_string(zx) + "/" + std::to_string(mo) +
+                 (gr ? "(g" + std::to_string(gr) + ")" : "");
+      }
+      tabla += "\n";
+    }
+    std::printf("MOVIDO (desenfoque horizontal; zxing/motor de 5, g = por tonos de gris):\n%s", tabla.c_str());
+    std::printf("MOVIDO: zxing solo %d/%d, motor %d/%d (%d por tonos de gris), falsos %d\n", okZx, casos, okMotor, casos,
+                okGris, falsosM);
+    falsos += falsosM;
+  }
+
   // --- Sin codigos: texto impreso y rayas (carton corrugado, rejillas). Toda
   // lectura es falsa. Con esfuerzo (boton presionado), 20 cuadros.
   {
