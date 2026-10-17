@@ -43,6 +43,9 @@ class _PantallaConteoState extends State<PantallaConteo> {
   Conteo? _conteo;
   bool _eligiendo = true;
 
+  /// Ya se aviso que la lista esta completa (vuelve a avisar si se deshace).
+  bool _completa = false;
+
   /// Se repinta en cada cuadro (marcas en vivo).
   final _tic = ValueNotifier<int>(0);
   Size _imagen = Size.zero;
@@ -126,6 +129,8 @@ class _PantallaConteoState extends State<PantallaConteo> {
   }
 
   void _alCambiarConteo() {
+    final c = _conteo;
+    if (c != null) _revisarCompleta(c);
     if (mounted) setState(() {});
   }
 
@@ -150,6 +155,7 @@ class _PantallaConteoState extends State<PantallaConteo> {
     for (final p in r.cambiadas) {
       registrar('CONTEO', 'caja=${p.id} corregida por votacion a ${p.valor} votos=${p.votos}');
     }
+    _revisarCompleta(conteo);
     _tic.value++;
   }
 
@@ -230,6 +236,29 @@ class _PantallaConteoState extends State<PantallaConteo> {
         ),
       ),
     );
+  }
+
+  /// Lista completa (todo lo esperado contado, nada de mas): se avisa una vez
+  /// con un sonido y un cartel, y se ofrece terminar.
+  void _revisarCompleta(Conteo conteo) {
+    final l = conteo.lista;
+    if (l == null) return;
+    final completa = conteo.unidadesEsperadas > 0 &&
+        conteo.unidadesCubiertas == conteo.unidadesEsperadas &&
+        conteo.unidadesContadas == conteo.unidadesEsperadas;
+    if (completa == _completa) return;
+    _completa = completa;
+    if (!completa || !mounted) return;
+    registrar('CONTEO', 'lista completa ${l.nombre}: ${conteo.unidadesEsperadas} unidades');
+    unawaited(AvisoLectura.leido(sonido: widget.ajustes.sonido, vibrar: widget.ajustes.vibrar));
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text('Lista completa: ${conteo.unidadesEsperadas} de ${conteo.unidadesEsperadas}'),
+        backgroundColor: Colors.green.shade700,
+        duration: const Duration(seconds: 6),
+        action: SnackBarAction(label: 'Terminar', textColor: Colors.white, onPressed: () => _resultados(terminar: true)),
+      ));
   }
 
   void _deshacer() {

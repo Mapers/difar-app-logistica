@@ -34,6 +34,12 @@ std::atomic<int> gHilos{0}; // 0 = segun los nucleos del telefono
 
 std::atomic<bool> gDetector{true};
 
+// Nitidez promedio de los ultimos cuadros (x16) y cuantos cuadros seguidos se
+// aplazaron los pasos dificiles por venir borrosos: se gastan en un cuadro
+// nitido (en el telefono la mayoria salia movida y los pasos caros no leian).
+std::atomic<int> gNitidezProm{0};
+std::atomic<int> gAplazados{0};
+
 int hilosEnUso() {
   const int h = gHilos.load();
   if (h > 0) return h;
@@ -540,12 +546,17 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     const bool completo = (modo & ML_MODO_CUADRO_COMPLETO) != 0;
     t->conTope = hilos <= 1 && presupuesto_us > 0;
     t->presupuesto_us = presupuesto_us;
-    t->zw = completo ? ancho : ancho * 3 / 4;
-    t->zh = completo ? alto : alto * 3 / 4;
+    // Buscando uno: lo que se ve en la ventanita de la camara (cuadrada, al
+    // centro de la imagen vertical). El sensor esta girado 90 grados: el ancho
+    // del cuadro es el alto de la pantalla, asi que se toma el centro del
+    // ancho (56%) y todo el alto.
+    const bool horizontal = ancho >= alto;
+    t->zw = completo ? ancho : (horizontal ? ancho * 6 / 10 : ancho);
+    t->zh = completo ? alto : (horizontal ? alto : alto * 6 / 10);
     t->zx = (ancho - t->zw) / 2;
     t->zy = (alto - t->zh) / 2;
-    t->rw = completo ? t->zw : ancho * 6 / 10;
-    t->rh = completo ? t->zh : alto * 6 / 10;
+    t->rw = completo ? t->zw : t->zw * 8 / 10;
+    t->rh = completo ? t->zh : t->zh * 8 / 10;
     t->rx = (ancho - t->rw) / 2;
     t->ry = (alto - t->rh) / 2;
 
@@ -566,7 +577,23 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     const bool conDetector = false;
 #endif
     t->conDetector = conDetector;
-    t->liviano = (modo & ML_MODO_INTERCALAR) && ronda % 4 != 0;
+    // Cuadro de pasos dificiles que viene mas borroso que el promedio: se
+    // aplaza al siguiente (hasta 3 veces seguidas).
+    bool aplazar = false;
+    {
+      const int n16 = t->est.nitidez * 16;
+      int prom = gNitidezProm.load();
+      prom = prom == 0 ? n16 : prom + (n16 - prom) / 8;
+      gNitidezProm = prom;
+      const bool pesado = (modo & ML_MODO_INTERCALAR) && ronda % 4 == 0;
+      if (pesado && n16 * 100 < prom * 85 && gAplazados.load() < 3) {
+        aplazar = true;
+        gAplazados++;
+      } else if (pesado) {
+        gAplazados = 0;
+      }
+    }
+    t->liviano = ((modo & ML_MODO_INTERCALAR) && ronda % 4 != 0) || aplazar;
     t->hacer(ML_PASO_RAPIDO);
     // El detector va siempre despues del rapido (es barato: 26-64 ms en el
     // telefono, y junto con el rapido es lo que lee los codigos reales).
@@ -587,7 +614,7 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     // los dificiles en cada cuadro bajaba la camara de 20 a 7 cuadros/s.
     // Los demas pasos dificiles casi nunca resolvieron con productos reales y
     // frenaban la camara a 4-5 cuadros/s: van 1 de cada 4 cuadros.
-    const bool liviano = (modo & ML_MODO_INTERCALAR) && ronda % 4 != 0;
+    const bool liviano = t->liviano;
     if (t->lector.listo() || rapidoAlcanza || liviano || (modo & ML_MODO_SOLO_RAPIDO)) {
       info->siguiente_ronda = ronda + 1;
     } else if (hilos > 1) {
@@ -632,6 +659,8 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
       }
       info->siguiente_ronda = ronda + std::max(hechos, 1);
     }
+    // Aplazado: el proximo cuadro vuelve a ser el de pasos dificiles.
+    if (aplazar) info->siguiente_ronda = ronda;
     for (int p = 0; p < ML_PASOS; p++) info->tiempo_paso_us[p] = t->tiempos[p].load();
     info->pasos = t->pasosHechos.load();
     info->ilegibles = t->lector.ilegibles.load();
