@@ -30,15 +30,19 @@ import androidx.camera.core.Camera;
  */
 final class Exposicion {
   static final long CORTA_NS = 4_000_000L; // 1/250 s
-  static final long MAXIMA_NS = 16_000_000L; // con muy poca luz, antes que ruido extremo
-  static final int OBJETIVO = 110; // brillo buscado (0..255)
+  // Tope con poca luz: en el A54 (v0.13) con ISO al maximo subia a 9 ms y
+  // volvia a borronear; mejor algo oscuro (el motor lee bien con brillo 60)
+  // y, si sigue faltando luz, la app enciende la linterna.
+  static final long MAXIMA_NS = 8_000_000L;
+  static final int OBJETIVO = 95; // brillo buscado (0..255): menos ISO, menos ruido
 
   enum Modo { INICIO, PRUEBA, PROPIA, AUTO_CORTA, AUTO }
 
   final boolean declaraManual;
   final int fps;
   final String diagnostico;
-  private final int isoMin, isoMax;
+  private final int isoMin;
+  final int isoMax;
   private final long expMin;
   private final Range<Integer> rangoEv;
   private final float pasoEv;

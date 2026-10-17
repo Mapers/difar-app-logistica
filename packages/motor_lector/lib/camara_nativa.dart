@@ -22,6 +22,7 @@ class DatosCamara {
         zoomMax = (m['zoomMax'] as num).toDouble(),
         exposicionManual = m['exposicionManual'] == true,
         fps = (m['fps'] as num?)?.toInt() ?? 30,
+        isoMax = (m['isoMax'] as num?)?.toInt() ?? 0,
         diagnostico = (m['diagnostico'] as String?) ?? '',
         nucleos = (m['nucleos'] as num).toInt();
 
@@ -43,6 +44,9 @@ class DatosCamara {
 
   /// Cuadros por segundo fijos que se pidieron (60 si el sensor puede).
   final int fps;
+
+  /// ISO maximo del sensor (0 si no se sabe).
+  final int isoMax;
 
   /// Nivel de la camara, capacidades y rangos (para el registro).
   final String diagnostico;
@@ -105,6 +109,7 @@ ResultadoMotor resultadoDesdeJson(Map<String, dynamic> m) {
           paso: PasoMotor.values[(c['p'] as int).clamp(0, PasoMotor.values.length - 1)],
           invertido: c['i'] == 1,
           sinLeer: c['s'] == 1,
+          verificado: c['v'] == 1,
           esquinas: [
             for (var k = 0; k < 4; k++)
               ((c['x'] as List)[k].toDouble() as double, (c['y'] as List)[k].toDouble() as double),

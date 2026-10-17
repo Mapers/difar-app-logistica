@@ -320,7 +320,7 @@ int main() {
     std::vector<ml_codigo> sal(64);
     ml_info info;
     std::set<std::string> leidos;
-    int cuadros = 0, ms = 0, falsosV = 0, instancias = 0, sinLeer = 0;
+    int cuadros = 0, ms = 0, falsosV = 0, instancias = 0, sinLeer = 0, verif20 = 0;
     for (; cuadros < 10 && instancias < 20; cuadros++) {
       instancias = 0;
       sinLeer = 0;
@@ -338,6 +338,7 @@ int main() {
         } else {
           leidos.insert(sal[k].texto);
           instancias++;
+          verif20 += sal[k].verificado;
         }
       }
       std::string tiempos;
@@ -346,8 +347,8 @@ int main() {
       std::printf("  20 cajas, cuadro %d: %d unidades (%zu productos), %d sin leer, %d ms, detector ubico %d [%s ]\n",
                   cuadros + 1, instancias, leidos.size(), sinLeer, info.microsegundos / 1000, info.regiones, tiempos.c_str());
     }
-    std::printf("20 CAJAS (10 productos x 2): %d/20 unidades, %zu/10 productos, en %d cuadros, %d ms, falsos %d\n",
-                instancias, leidos.size(), cuadros, ms, falsosV);
+    std::printf("20 CAJAS (10 productos x 2): %d/20 unidades, %zu/10 productos, en %d cuadros, %d ms, falsos %d, "
+                "lecturas verificadas %d\n", instancias, leidos.size(), cuadros, ms, falsosV, verif20);
     falsos += falsosV;
   }
 
@@ -362,7 +363,7 @@ int main() {
       for (int i = 0; i < 12; i++) s += (d[i] - '0') * (i % 2 ? 3 : 1);
       return d + (char)('0' + (10 - s % 10) % 10);
     };
-    int okZx = 0, okMotor = 0, okGris = 0, casos = 0, falsosM = 0;
+    int okZx = 0, okMotor = 0, okGris = 0, casos = 0, falsosM = 0, verificados = 0;
     std::string tabla;
     for (float escala : {0.8f, 1.0f, 1.3f}) {
       tabla += "  escala " + std::to_string(escala).substr(0, 3) + " (" +
@@ -401,6 +402,7 @@ int main() {
               if (sal[k].sin_leer) continue;
               if (c.esperado == sal[k].texto) {
                 leido = true;
+                verificados += sal[k].verificado;
                 deGris = deGris || sal[k].paso == ML_PASO_GRIS;
               } else {
                 std::printf("  LECTURA FALSA (movido %d px): '%s' en vez de %s, paso %d\n", largo, sal[k].texto,
@@ -421,8 +423,8 @@ int main() {
       tabla += "\n";
     }
     std::printf("MOVIDO (desenfoque horizontal; zxing/motor de 5, g = por tonos de gris):\n%s", tabla.c_str());
-    std::printf("MOVIDO: zxing solo %d/%d, motor %d/%d (%d por tonos de gris), falsos %d\n", okZx, casos, okMotor, casos,
-                okGris, falsosM);
+    std::printf("MOVIDO: zxing solo %d/%d, motor %d/%d (%d por tonos de gris, %d lecturas verificadas), falsos %d\n", okZx,
+                casos, okMotor, casos, okGris, verificados, falsosM);
     falsos += falsosM;
   }
 

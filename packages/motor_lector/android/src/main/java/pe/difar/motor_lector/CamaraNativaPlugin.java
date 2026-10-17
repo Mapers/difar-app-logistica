@@ -342,6 +342,7 @@ public class CamaraNativaPlugin
     m.put("zoomMax", zoom == null ? 1.0 : (double) zoom.getMaxZoomRatio());
     m.put("exposicionManual", exposicion.declaraManual);
     m.put("fps", exposicion.fps);
+    m.put("isoMax", exposicion.isoMax);
     m.put("diagnostico", exposicion.diagnostico);
     m.put("nucleos", Runtime.getRuntime().availableProcessors());
     r.success(m);

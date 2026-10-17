@@ -412,10 +412,11 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
           simbologia: Simbologia.deMotor(c.bitFormato),
           fuente: 'C++',
           detalle: c.paso.nombre,
+          verificado: c.verificado,
         ),
     ];
 
-    _linternaAutomatica(r.info);
+    _linternaAutomatica(r.info, cuadro);
     _zoomAutomatico(r.codigos);
     final confirmados = _fusion.confirmar(codigos);
     final hayAlgo = codigos.isNotEmpty || r.info.regiones > 0;
@@ -426,7 +427,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       _primerVisto = null;
     }
     for (final d in _fusion.retenidos) {
-      registrar('DUDOSO', '${d.valor} ${d.formato} paso=${d.detalle} (se cuenta si se repite en el cuadro siguiente)');
+      registrar('DUDOSO', '${d.valor} ${d.formato} paso=${d.detalle} (se cuenta si se repite en 3 s)');
     }
     if (!_capturas.isClosed) {
       _capturas.add(Captura(tamVertical(sensor, giro), confirmados,
@@ -461,12 +462,17 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// Con poca luz sostenida (~1 s) enciende la linterna sola, si esta activado.
-  void _linternaAutomatica(InfoMotor info) {
+  /// Tambien si la exposicion propia ya esta al tope (ISO maximo y tiempo
+  /// largo): sin mas luz la imagen se borronea o se llena de ruido.
+  void _linternaAutomatica(InfoMotor info, CuadroNativo cuadro) {
     if (!ajustes.linternaAuto || linterna) return;
-    _cuadrosOscuros = info.sugerirLinterna ? _cuadrosOscuros + 1 : 0;
+    final isoMax = _datos?.isoMax ?? 0;
+    final alTope = isoMax > 0 && cuadro.iso >= isoMax * 0.95 && cuadro.exposicionNs >= 6000000;
+    _cuadrosOscuros = info.sugerirLinterna || alTope ? _cuadrosOscuros + 1 : 0;
     if (_cuadrosOscuros >= 12) {
       _cuadrosOscuros = 0;
-      registrar('CAMARA', 'poca luz (brillo ${info.brillo}): linterna automatica');
+      registrar('CAMARA', 'poca luz (brillo ${info.brillo} iso=${cuadro.iso} '
+          'exposicion=${(cuadro.exposicionNs / 1e6).toStringAsFixed(1)}ms): linterna automatica');
       unawaited(cambiarLinterna(true).then((_) {
         linternaAutomatica = true;
         notifyListeners();

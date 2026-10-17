@@ -19,6 +19,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 using namespace ZXing;
@@ -233,6 +234,9 @@ struct Trabajo {
   Afin enAjustada() const { return Afin::desplazar((float)rx, (float)ry); }
 
   bool conDetector = false;
+  // Cuadro liviano del intercalado: sin el lector en tonos de gris (en el
+  // telefono le sumaba 30-70 ms a cada cuadro con un codigo que no se lee).
+  bool liviano = false;
 
   void rapido() {
     // Sobre la imagen original y con mas lineas de barrido (tryHarder): lo
@@ -366,7 +370,7 @@ struct Trabajo {
   bool leerGris(const det::Recorte& rec, const Afin& a) {
     const int32_t m = lector.mascara;
     const bool ean13 = m == 0 || (m & (ML_EAN13 | ML_UPCA)), ean8 = m == 0 || (m & ML_EAN8);
-    if (!ean13 && !ean8) return false;
+    if (liviano || (!ean13 && !ean8)) return false;
     const auto t0 = Reloj::now();
     gris::Resultado g;
     const bool ok = gris::leerEan(rec.img, ean13, ean8, g);
@@ -424,6 +428,49 @@ struct Trabajo {
     }
   }
 };
+
+#ifdef ML_CON_OPENCV
+// Verificacion de EAN/UPC contra los tonos de gris, con memoria por valor (el
+// mismo codigo se lee en muchos cuadros seguidos y verificar cuesta).
+// En el telefono zxing leyo 4750412416093 de la caja 7750082416093 sobre la
+// imagen original (v0.13): pasaba el digito verificador.
+std::mutex gCerrojoVerificados;
+std::unordered_map<std::string, std::pair<int, Reloj::time_point>> gVerificados;
+
+bool esEan(BarcodeFormat f) {
+  return f == BarcodeFormat::EAN13 || f == BarcodeFormat::UPCA || f == BarcodeFormat::EAN8;
+}
+
+int verificarLectura(const Lectura& l, const uint8_t* px, int ancho, int alto, int fila) {
+  const std::string texto = l.formato == BarcodeFormat::UPCA ? "0" + l.texto : l.texto;
+  const auto ahora = Reloj::now();
+  {
+    std::lock_guard<std::mutex> c(gCerrojoVerificados);
+    const auto it = gVerificados.find(texto);
+    // Lo confirmado vale 10 s; lo rechazado o dudoso, medio segundo.
+    if (it != gVerificados.end() &&
+        ahora - it->second.second < std::chrono::milliseconds(it->second.first == 1 ? 10000 : 500))
+      return it->second.first;
+  }
+  // Recorte enderezado alrededor del codigo (zxing da una linea o un cuadrilatero).
+  det::Cuadrilatero q;
+  for (int i = 0; i < 4; i++) {
+    q[i * 2] = l.aEntrada.a * l.pos[i].x + l.aEntrada.b * l.pos[i].y + l.aEntrada.tx;
+    q[i * 2 + 1] = l.aEntrada.c * l.pos[i].x + l.aEntrada.d * l.pos[i].y + l.aEntrada.ty;
+  }
+  int r = 0;
+  try {
+    const auto rec = det::enderezar(px, ancho, alto, fila, q);
+    r = gris::verificarEan(rec.img, texto);
+  } catch (...) {
+    r = 0;
+  }
+  std::lock_guard<std::mutex> c(gCerrojoVerificados);
+  if (gVerificados.size() > 200) gVerificados.clear();
+  gVerificados[texto] = {r, ahora};
+  return r;
+}
+#endif
 
 void copiarTexto(char* destino, size_t capacidad, const std::string& texto) {
   const size_t n = std::min(texto.size(), capacidad - 1);
@@ -519,6 +566,7 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     const bool conDetector = false;
 #endif
     t->conDetector = conDetector;
+    t->liviano = (modo & ML_MODO_INTERCALAR) && ronda % 4 != 0;
     t->hacer(ML_PASO_RAPIDO);
     // El detector va siempre despues del rapido (es barato: 26-64 ms en el
     // telefono, y junto con el rapido es lo que lee los codigos reales).
@@ -600,8 +648,19 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     int32_t escritos = 0;
     for (const auto& lec : leidos) {
       if (escritos >= max_salida) break;
+      int verificado = lec.paso == ML_PASO_GRIS ? 1 : 0;
+#ifdef ML_CON_OPENCV
+      if (verificado == 0 && esEan(lec.formato)) {
+        verificado = verificarLectura(lec, t->px, t->ancho, t->alto, t->fila);
+        if (verificado < 0) {
+          info->ilegibles++; // los digitos no calzan con la imagen: lectura falsa
+          continue;
+        }
+      }
+#endif
       ml_codigo& c = salida[escritos++];
       std::memset(&c, 0, sizeof(ml_codigo));
+      c.verificado = verificado == 1 ? 1 : 0;
       c.formato = aBit(lec.formato);
       c.paso = lec.paso;
       c.invertido = lec.invertido ? 1 : 0;

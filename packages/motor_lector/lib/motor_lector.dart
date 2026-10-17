@@ -82,12 +82,17 @@ class CodigoMotor {
     required this.invertido,
     required this.esquinas,
     this.sinLeer = false,
+    this.verificado = false,
   });
 
   final String texto;
 
   /// OpenCV ve un codigo en [esquinas] pero no se pudo leer ([texto] vacio).
   final bool sinLeer;
+
+  /// EAN/UPC cuyos digitos el motor comprobo contra los tonos de gris de la
+  /// imagen: se puede aceptar al primer cuadro.
+  final bool verificado;
 
   /// Nombre del formato segun zxing ("EAN-13", "Code 128", "QR Code"...).
   final String formato;
@@ -171,6 +176,8 @@ final class _MlCodigo extends Struct {
   external Array<Uint8> texto;
   @Int32()
   external int sinLeer;
+  @Int32()
+  external int verificado;
 }
 
 final class _MlInfo extends Struct {
@@ -300,6 +307,7 @@ ResultadoMotor leerCuadro(
           invertido: c.invertido != 0,
           esquinas: [for (var k = 0; k < 4; k++) (c.x[k].toDouble(), c.y[k].toDouble())],
           sinLeer: c.sinLeer != 0,
+          verificado: c.verificado != 0,
         );
       }(),
   ];

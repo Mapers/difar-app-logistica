@@ -68,6 +68,7 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_pe_difar_motor_1lector_MotorNativo_
     agregarNumero(s, "p", c.paso);
     agregarNumero(s, "i", c.invertido);
     agregarNumero(s, "s", c.sin_leer);
+    agregarNumero(s, "v", c.verificado);
     s += "\"x\":[";
     for (int k = 0; k < 4; k++) s += std::to_string(c.x[k]) + (k < 3 ? "," : "");
     s += "],\"y\":[";

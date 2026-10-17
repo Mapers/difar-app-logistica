@@ -5,7 +5,8 @@ import '../core/codigos.dart';
 /// Un codigo visto en un cuadro, con sus esquinas en la imagen ya puesta en
 /// vertical (como se ve en pantalla).
 class CodigoVisto {
-  CodigoVisto(this.valor, this.formato, this.esquinas, {this.simbologia, this.fuente = '', this.detalle = ''});
+  CodigoVisto(this.valor, this.formato, this.esquinas,
+      {this.simbologia, this.fuente = '', this.detalle = '', this.verificado = false});
 
   final String valor;
   final String formato;
@@ -17,6 +18,9 @@ class CodigoVisto {
 
   /// Paso del motor C++ que lo logro (para el registro).
   final String detalle;
+
+  /// EAN/UPC con los digitos comprobados contra los tonos de gris de la imagen.
+  final bool verificado;
 }
 
 /// Para el registro: largo del codigo en pixeles de la camara y, si se sabe
@@ -75,11 +79,21 @@ class Fusion {
   /// Pasos que leen la imagen original, sin prepararla (PasoMotor.nombre).
   static const _pasosDirectos = {'rapido', 'completo', 'invertido', ''};
 
-  static const ventana = Duration(milliseconds: 1500);
+  /// En el telefono, con el boton presionado, se analizan 7-10 cuadros/s y
+  /// un mismo codigo a veces se lee 1 vez cada 1,5-2 s (registro v0.13).
+  static const ventana = Duration(milliseconds: 3000);
+
+  static const _eanUpc = {Simbologia.ean13, Simbologia.ean8, Simbologia.upcA, Simbologia.upcE};
 
   /// Se puede aceptar al primer cuadro: leido sobre la imagen original y con
   /// digito de control.
-  static bool esDirecto(CodigoVisto c) => _pasosDirectos.contains(c.detalle) && !(c.simbologia?.sinControl ?? false);
+  /// EAN/UPC: solo si el motor lo verifico contra la imagen (en el telefono
+  /// zxing leyo 4750412416093 de la caja 7750082416093 sobre la imagen
+  /// original, con digito verificador valido).
+  static bool esDirecto(CodigoVisto c) {
+    if (_eanUpc.contains(c.simbologia)) return c.verificado;
+    return _pasosDirectos.contains(c.detalle) && !(c.simbologia?.sinControl ?? false);
+  }
 
   final _visto = <String, DateTime>{};
 
@@ -97,8 +111,7 @@ class Fusion {
       final ok = decision[c.valor] ??= () {
         final anterior = _visto[c.valor];
         _visto[c.valor] = t;
-        final directo = codigos.any((o) => o.valor == c.valor && _pasosDirectos.contains(o.detalle));
-        final dudoso = (c.simbologia?.sinControl ?? false) || !directo;
+        final dudoso = !codigos.any((o) => o.valor == c.valor && esDirecto(o));
         return !dudoso || (anterior != null && t.difference(anterior) <= ventana);
       }();
       (ok ? aceptados : dudosos).add(c);
