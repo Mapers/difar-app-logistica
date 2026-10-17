@@ -6,7 +6,7 @@ import '../core/codigos.dart';
 /// vertical (como se ve en pantalla).
 class CodigoVisto {
   CodigoVisto(this.valor, this.formato, this.esquinas,
-      {this.simbologia, this.fuente = '', this.detalle = '', this.verificado = false});
+      {this.simbologia, this.fuente = '', this.detalle = '', this.verificado = false, this.rechazado = false});
 
   final String valor;
   final String formato;
@@ -21,6 +21,11 @@ class CodigoVisto {
 
   /// EAN/UPC con los digitos comprobados contra los tonos de gris de la imagen.
   final bool verificado;
+
+  /// EAN/UPC cuyos digitos no calzaron con la imagen: no se cuenta (una
+  /// lectura falsa sobre una imagen quieta se repite cuadro a cuadro); queda
+  /// en el registro.
+  final bool rechazado;
 }
 
 /// Para el registro: largo del codigo en pixeles de la camara y, si se sabe
@@ -87,11 +92,16 @@ class Fusion {
 
   /// Se puede aceptar al primer cuadro: leido sobre la imagen original y con
   /// digito de control.
-  /// EAN/UPC: solo si el motor lo verifico contra la imagen (en el telefono
-  /// zxing leyo 4750412416093 de la caja 7750082416093 sobre la imagen
-  /// original, con digito verificador valido).
+  /// EAN/UPC: al instante si el motor lo verifico contra la imagen; si los
+  /// digitos no calzaron (en el telefono zxing leyo 4750412416093 de la caja
+  /// 7750082416093), se pide repetido; si no se pudo saber, vale la regla de
+  /// los demas (paso directo). En v0.14-v0.16 lo no verificado esperaba
+  /// siempre y en el telefono las lecturas reales se perdian (registro v0.16).
   static bool esDirecto(CodigoVisto c) {
-    if (_eanUpc.contains(c.simbologia)) return c.verificado;
+    if (_eanUpc.contains(c.simbologia)) {
+      if (c.verificado) return true;
+      if (c.rechazado) return false;
+    }
     return _pasosDirectos.contains(c.detalle) && !(c.simbologia?.sinControl ?? false);
   }
 
@@ -111,6 +121,7 @@ class Fusion {
       final ok = decision[c.valor] ??= () {
         final anterior = _visto[c.valor];
         _visto[c.valor] = t;
+        if (c.rechazado) return false;
         final dudoso = !codigos.any((o) => o.valor == c.valor && esDirecto(o));
         return !dudoso || (anterior != null && t.difference(anterior) <= ventana);
       }();

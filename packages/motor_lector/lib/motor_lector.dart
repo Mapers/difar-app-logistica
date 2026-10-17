@@ -88,6 +88,7 @@ class CodigoMotor {
     required this.esquinas,
     this.sinLeer = false,
     this.verificado = false,
+    this.rechazado = false,
   });
 
   final String texto;
@@ -98,6 +99,10 @@ class CodigoMotor {
   /// EAN/UPC cuyos digitos el motor comprobo contra los tonos de gris de la
   /// imagen: se puede aceptar al primer cuadro.
   final bool verificado;
+
+  /// Los digitos no calzan con la imagen (puede ser una lectura falsa, o la
+  /// verificacion equivocada): la app lo pide repetido.
+  final bool rechazado;
 
   /// Nombre del formato segun zxing ("EAN-13", "Code 128", "QR Code"...).
   final String formato;
@@ -312,7 +317,8 @@ ResultadoMotor leerCuadro(
           invertido: c.invertido != 0,
           esquinas: [for (var k = 0; k < 4; k++) (c.x[k].toDouble(), c.y[k].toDouble())],
           sinLeer: c.sinLeer != 0,
-          verificado: c.verificado != 0,
+          verificado: c.verificado == 1,
+          rechazado: c.verificado == -1,
         );
       }(),
   ];

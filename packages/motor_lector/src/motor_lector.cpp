@@ -773,16 +773,15 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
 #ifdef ML_CON_OPENCV
       if (lec.paso != ML_PASO_GRIS && lec.paso != ML_PASO_RED && lec.paso != ML_PASO_RESTAURADO &&
           esEan(lec.formato)) {
+        // -1 ya no se descarta ni cuenta como ilegible: en el telefono (v0.16)
+        // la verificacion rechazo lecturas reales y cada rechazo daba "codigo
+        // ilegible" al instante. Ahora la app la pide repetida.
         verificado = verificarLectura(lec, t->px, t->ancho, t->alto, t->fila);
-        if (verificado < 0) {
-          info->ilegibles++; // los digitos no calzan con la imagen: lectura falsa
-          continue;
-        }
       }
 #endif
       ml_codigo& c = salida[escritos++];
       std::memset(&c, 0, sizeof(ml_codigo));
-      c.verificado = verificado == 1 ? 1 : 0;
+      c.verificado = verificado;
       c.formato = aBit(lec.formato);
       c.paso = lec.paso;
       c.invertido = lec.invertido ? 1 : 0;

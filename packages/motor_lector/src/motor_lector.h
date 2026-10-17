@@ -70,7 +70,7 @@ typedef struct {
   char nombre_formato[32];
   char texto[1024];
   int32_t sin_leer;     // 1: OpenCV ve un codigo ahi pero no se pudo leer (texto vacio)
-  int32_t verificado;   // 1: EAN/UPC cuyos digitos calzan con los tonos de gris de la imagen
+  int32_t verificado;   // EAN/UPC contra los tonos de gris: 1 calzan, -1 no calzan, 0 no se sabe
 } ml_codigo;
 
 typedef struct {

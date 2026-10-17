@@ -5,9 +5,10 @@ import 'package:difar_logistica/lectura/fusion.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Por defecto lo leido por el paso rapido llega verificado por el motor.
-CodigoVisto codigo(String valor, Simbologia s, String fuente, {String paso = 'rapido', bool? verificado}) =>
+CodigoVisto codigo(String valor, Simbologia s, String fuente,
+        {String paso = 'rapido', bool? verificado, bool rechazado = false}) =>
     CodigoVisto(valor, s.nombre, const [Offset(0, 0)],
-        simbologia: s, fuente: fuente, detalle: paso, verificado: verificado ?? paso == 'rapido');
+        simbologia: s, fuente: fuente, detalle: paso, verificado: verificado ?? paso == 'rapido', rechazado: rechazado);
 
 void main() {
   test('un EAN se acepta al primer cuadro', () {
@@ -101,10 +102,19 @@ void main() {
     }
   });
 
-  test('EAN sin verificar contra la imagen espera a repetirse aunque venga del paso rapido (falso del telefono v0.13)', () {
+  test('EAN rechazado por la imagen no se cuenta aunque se repita (falso del telefono v0.13)', () {
     final f = Fusion();
     final t0 = DateTime(2026, 10, 17, 6, 26, 15);
-    expect(f.confirmar([codigo('4750412416093', Simbologia.ean13, 'C++', verificado: false)], t0), isEmpty);
+    expect(f.confirmar([codigo('4750412416093', Simbologia.ean13, 'C++', verificado: false, rechazado: true)], t0),
+        isEmpty);
+    expect(f.confirmar([codigo('4750412416093', Simbologia.ean13, 'C++', verificado: false, rechazado: true)],
+        t0.add(const Duration(milliseconds: 100))), isEmpty);
     expect(f.confirmar([codigo('7750082416093', Simbologia.ean13, 'C++')], t0).single.valor, '7750082416093');
+  });
+
+  test('EAN que no se pudo verificar entra al instante si viene del paso rapido (registro v0.16)', () {
+    final f = Fusion();
+    expect(f.confirmar([codigo('7750082416093', Simbologia.ean13, 'C++', verificado: false)]).single.valor,
+        '7750082416093');
   });
 }

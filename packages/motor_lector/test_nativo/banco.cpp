@@ -279,12 +279,12 @@ int main() {
         tiempos += " |";
       }
       int reales = 0;
-      for (int k = 0; k < n; k++) reales += !sal[k].sin_leer;
+      for (int k = 0; k < n; k++) reales += !sal[k].sin_leer && sal[k].verificado != -1;
       bool okMotor = reales > 0 && c.esperado == sal[0].texto;
       // Lectura falsa: devolvio un texto que no es el del codigo. Es el peor
       // error (cuenta un producto que no esta): el banco falla si hay alguna.
       for (int k = 0; k < n; k++)
-        if (!sal[k].sin_leer && c.esperado != sal[k].texto) {
+        if (!sal[k].sin_leer && sal[k].verificado != -1 && c.esperado != sal[k].texto) {
           std::printf("  LECTURA FALSA: '%s' (paso %d) en vez de '%s'\n", sal[k].texto, sal[k].paso, c.esperado.c_str());
           falsos++;
         }
@@ -373,6 +373,7 @@ int main() {
           sinLeer++;
           continue;
         }
+        if (sal[k].verificado == -1) continue; // rechazado: la app no lo cuenta
         if (std::find(esperados.begin(), esperados.end(), sal[k].texto) == esperados.end()) {
           std::printf("  LECTURA FALSA (20 codigos): '%s' paso %d\n", sal[k].texto, sal[k].paso);
           falsosV++;
@@ -440,7 +441,7 @@ int main() {
           for (int cuadro = 0; cuadro < 2 && !leido; cuadro++) {
             const int n = ml_leer(b.data(), W, H, W, ML_PIXEL_LUMA, 0, ML_MODO_TODOS, 0, cuadro, sal, 8, &info);
             for (int k = 0; k < n; k++) {
-              if (sal[k].sin_leer) continue;
+              if (sal[k].sin_leer || sal[k].verificado == -1) continue; // rechazado: la app no lo cuenta
               if (c.esperado == sal[k].texto) {
                 leido = true;
                 verificados += sal[k].verificado;
@@ -514,7 +515,7 @@ int main() {
         for (int cuadro = 0; cuadro < 2 && !leido; cuadro++) {
           const int n = ml_leer(b.data(), W, H, W, ML_PIXEL_LUMA, 0, ML_MODO_TODOS, 0, cuadro, sal, 8, &info);
           for (int k = 0; k < n; k++) {
-            if (sal[k].sin_leer) continue;
+            if (sal[k].sin_leer || sal[k].verificado == -1) continue; // rechazado: la app no lo cuenta
             if (c.esperado == sal[k].texto) {
               leido = true;
               deRed = deRed || sal[k].paso == ML_PASO_RESTAURADO;
@@ -568,7 +569,7 @@ int main() {
     for (int c = 0; c < 20; c++) {
       const int n = ml_leer(b.data(), W, H, W, ML_PIXEL_LUMA, 0, ML_MODO_TODOS, 0, c, sal, 8, &info);
       for (int k = 0; k < n; k++) {
-        if (sal[k].sin_leer) continue;
+        if (sal[k].sin_leer || sal[k].verificado == -1) continue; // rechazado: la app no lo cuenta
         std::printf("  LECTURA FALSA (texto/rayas): '%s' %s paso %d\n", sal[k].texto, sal[k].nombre_formato, sal[k].paso);
         falsosT++;
       }

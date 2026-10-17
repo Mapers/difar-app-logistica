@@ -426,6 +426,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
           fuente: 'C++',
           detalle: c.paso.nombre,
           verificado: c.verificado,
+          rechazado: c.rechazado,
         ),
     ];
 
@@ -440,7 +441,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       _primerVisto = null;
     }
     for (final d in _fusion.retenidos) {
-      registrar('DUDOSO', '${d.valor} ${d.formato} paso=${d.detalle} (se cuenta si se repite en 3 s)');
+      registrar('DUDOSO', '${d.valor} ${d.formato} paso=${d.detalle}${d.rechazado ? ' no_calza_con_imagen (no se cuenta)' : ' (se cuenta si se repite en 3 s)'}');
     }
     if (!_capturas.isClosed) {
       _capturas.add(Captura(tamVertical(sensor, giro), confirmados,
@@ -486,7 +487,11 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     if (!ajustes.linternaAuto || linterna) return;
     final isoMax = _datos?.isoMax ?? 0;
     final alTope = isoMax > 0 && cuadro.iso >= isoMax * 0.95 && cuadro.exposicionNs >= 6000000;
-    _cuadrosOscuros = info.sugerirLinterna || alTope ? _cuadrosOscuros + 1 : 0;
+    // Con exposicion propia la imagen oscura es pasajera mientras el ISO no
+    // este al tope (en el A54 se encendio con brillo 47 e ISO 25, v0.16).
+    final propia = cuadro.modoExposicion.startsWith('propia');
+    final oscuro = info.sugerirLinterna && (!propia || (isoMax > 0 && cuadro.iso >= isoMax * 0.9));
+    _cuadrosOscuros = oscuro || alTope ? _cuadrosOscuros + 1 : 0;
     if (_cuadrosOscuros >= 12) {
       _cuadrosOscuros = 0;
       registrar('CAMARA', 'poca luz (brillo ${info.brillo} iso=${cuadro.iso} '

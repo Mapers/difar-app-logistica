@@ -114,6 +114,7 @@ ResultadoMotor resultadoDesdeJson(Map<String, dynamic> m) {
           invertido: c['i'] == 1,
           sinLeer: c['s'] == 1,
           verificado: c['v'] == 1,
+          rechazado: c['v'] == -1,
           esquinas: [
             for (var k = 0; k < 4; k++)
               ((c['x'] as List)[k].toDouble() as double, (c['y'] as List)[k].toDouble() as double),

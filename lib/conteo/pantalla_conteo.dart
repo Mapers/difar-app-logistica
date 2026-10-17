@@ -140,8 +140,11 @@ class _PantallaConteoState extends State<PantallaConteo> {
     final ahora = DateTime.now();
     _imagen = c.imagen;
     final obs = [
+      // Lo que no calza con la imagen cuenta como ubicado sin leer.
       for (final v in c.crudos)
-        Observacion(v.esquinas, valor: v.valor, formato: v.formato, directa: Fusion.esDirecto(v)),
+        v.rechazado
+            ? Observacion(v.esquinas)
+            : Observacion(v.esquinas, valor: v.valor, formato: v.formato, directa: Fusion.esDirecto(v)),
       for (final q in c.sinLeer) Observacion(q),
     ];
     final r = conteo.actualizar(obs, ahora);

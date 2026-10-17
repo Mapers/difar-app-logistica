@@ -60,6 +60,7 @@ final class Exposicion {
   private boolean linterna;
   private int cuadros, resultadosAlFijar;
   private int ev; // compensacion en pasos del sensor
+  private int desviados, reaplicadas;
   private long expSinEv;
 
   Exposicion(Camera camara, Size analisis, Size previa, boolean activa) {
@@ -117,7 +118,7 @@ final class Exposicion {
   String modo() {
     switch (modo) {
       case PROPIA:
-        return "propia";
+        return reaplicadas == 0 ? "propia" : "propia(reaplicada " + reaplicadas + ")";
       case PRUEBA:
         return "probando_propia";
       case AUTO_CORTA:
@@ -175,6 +176,17 @@ final class Exposicion {
   private CaptureRequestOptions corregirPropia(int brillo, int quemados) {
     // El cambio tarda unos cuadros en llegar al sensor: se corrige cada 3.
     if (++cuadros % 3 != 0) return null;
+    // Si el sensor ya no usa el tiempo pedido (en el A54, al apagar la
+    // linterna CameraX volvio a la automatica: 16,7 ms), se vuelve a pedir.
+    if (expActual > 0 && Math.abs(expActual - expFijada) > expFijada * 0.3) {
+      if (++desviados >= 3) {
+        desviados = 0;
+        reaplicadas++;
+        return fijar();
+      }
+    } else {
+      desviados = 0;
+    }
     final int objetivo = quemados > 8 ? OBJETIVO - 25 : OBJETIVO;
     double factor = objetivo / (double) Math.max(brillo, 4);
     factor = Math.max(0.5, Math.min(2.0, factor));
@@ -204,6 +216,11 @@ final class Exposicion {
     if (nuevo == ev) return null;
     ev = nuevo;
     return opcionesAuto();
+  }
+
+  /** La camara usa (o esta probando) el tiempo propio: la linterna va en sus opciones. */
+  boolean manual() {
+    return modo == Modo.PROPIA || modo == Modo.PRUEBA;
   }
 
   boolean probando() {

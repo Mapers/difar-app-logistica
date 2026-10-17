@@ -390,8 +390,15 @@ public class CamaraNativaPlugin
   private void fijarLinterna(boolean encendida) {
     linterna = encendida;
     if (camara == null) return;
-    camara.getCameraControl().enableTorch(encendida);
     final Exposicion e = exposicion;
+    // Con exposicion manual la linterna va en las mismas opciones (FLASH_MODE):
+    // enableTorch de CameraX vuelve a encender la automatica (en el A54 quedo
+    // en 16,7 ms al apagar la linterna, registro v0.16).
+    if (e != null && e.manual()) {
+      aplicar(e.cambiarLinterna(encendida));
+      return;
+    }
+    camara.getCameraControl().enableTorch(encendida);
     if (e != null) aplicar(e.cambiarLinterna(encendida));
   }
 
