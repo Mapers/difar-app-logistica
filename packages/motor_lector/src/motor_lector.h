@@ -43,7 +43,7 @@ extern "C" {
 #define ML_MODO_TODOS 1           // todos los codigos (no cortar con el primero)
 #define ML_MODO_CUADRO_COMPLETO 2 // todo el cuadro (si no, la zona central)
 #define ML_MODO_SOLO_RAPIDO 4     // solo el paso rapido (camara sin disparar: ahorra bateria)
-#define ML_MODO_INTERCALAR 8      // cuadros impares ([ronda]) solo el rapido: mas cuadros por segundo
+#define ML_MODO_INTERCALAR 8      // pasos dificiles 1 de cada 4 cuadros ([ronda]), con tope de 200 ms
 
 // Paso que logro la lectura (para el registro y para afinar).
 #define ML_PASO_RAPIDO 1     // zona central (75%), sin preparar

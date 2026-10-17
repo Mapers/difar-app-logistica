@@ -391,11 +391,6 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
       auto it = std::find(dificiles.begin(), dificiles.end(), paso);
       if (it != dificiles.end()) std::rotate(dificiles.begin(), it, it + 1);
     };
-    if (gDetector.load() && !t->lector.multiple) {
-#ifdef ML_CON_OPENCV
-      dificiles.insert(dificiles.begin(), ML_PASO_DETECTOR);
-#endif
-    }
     if (t->est.brillo < 70) adelantar(ML_PASO_POCA_LUZ);
     if (t->est.quemados >= 3 || t->est.contraste < 30 || t->est.brillo < 70) adelantar(ML_PASO_REFLEJOS);
 
@@ -406,9 +401,9 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
 #endif
     t->conDetector = conDetector;
     t->hacer(ML_PASO_RAPIDO);
-    // Buscando todos, el detector va siempre (es lo que encuentra varios a la
-    // vez); buscando uno, es un paso dificil mas (el primero de la lista).
-    if (conDetector && t->lector.multiple && !(modo & ML_MODO_SOLO_RAPIDO)) t->hacer(ML_PASO_DETECTOR);
+    // El detector va siempre despues del rapido (es barato: 26-64 ms en el
+    // telefono, y junto con el rapido es lo que lee los codigos reales).
+    if (conDetector && !t->lector.listo() && !(modo & ML_MODO_SOLO_RAPIDO)) t->hacer(ML_PASO_DETECTOR);
     const int delRapido = t->lector.cuantos.load();
 
     const int n = (int)dificiles.size();
@@ -423,7 +418,9 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     // todos) y uno con los pasos dificiles. En el telefono los codigos reales
     // los leia sobre todo el rapido apenas la imagen salia nitida, y correr
     // los dificiles en cada cuadro bajaba la camara de 20 a 7 cuadros/s.
-    const bool liviano = (modo & ML_MODO_INTERCALAR) && ronda % 2 == 1;
+    // Los demas pasos dificiles casi nunca resolvieron con productos reales y
+    // frenaban la camara a 4-5 cuadros/s: van 1 de cada 4 cuadros.
+    const bool liviano = (modo & ML_MODO_INTERCALAR) && ronda % 4 != 0;
     if (t->lector.listo() || rapidoAlcanza || liviano || (modo & ML_MODO_SOLO_RAPIDO)) {
       info->siguiente_ronda = ronda + 1;
     } else if (hilos > 1) {
@@ -450,6 +447,9 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
         // Buscando todos y con algo ya leido: se espera poco a los dificiles
         // (lo que lean despues se descarta; el proximo cuadro vuelve a probar).
         t->aviso.wait_for(l, std::chrono::milliseconds(120), hayNuevo);
+      } else if (modo & ML_MODO_INTERCALAR) {
+        // Con la camara en vivo: tope de 200 ms para no trabar la camara.
+        t->aviso.wait_for(l, std::chrono::milliseconds(200), hayNuevo);
       } else {
         t->aviso.wait(l, hayNuevo);
       }

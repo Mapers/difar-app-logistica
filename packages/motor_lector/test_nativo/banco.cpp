@@ -200,6 +200,8 @@ int main() {
   const int detector = std::getenv("BANCO_DETECTOR") ? std::atoi(std::getenv("BANCO_DETECTOR")) : 1;
   ml_configurar_detector(detector);
   std::printf("detector OpenCV: %s\n", detector ? "si" : "no");
+  // BANCO_INTERCALAR=1: como la camara en vivo (pasos dificiles 1 de cada 4 cuadros).
+  const int modoUno = std::getenv("BANCO_INTERCALAR") && std::atoi(std::getenv("BANCO_INTERCALAR")) ? ML_MODO_INTERCALAR : 0;
   std::printf("hilos: %s   tope por cuadro (solo uno tras otro): %.1f ms\n",
               hilos == 0 ? "segun nucleos (paralelo)" : std::to_string(hilos).c_str(), presupuesto / 1000.0);
   std::printf("%-17s %-11s %-6s %-6s %-5s %-7s %s\n", "escena", "codigo", "zxing", "motor", "paso", "cuadros",
@@ -227,7 +229,7 @@ int main() {
       int n = 0, cuadros = 0, ronda = 0, peorUs = 0, sumaUs = 0;
       std::string tiempos;
       for (; cuadros < 12 && n == 0; cuadros++) {
-        n = ml_leer(bytes.data(), W, H, W, ML_PIXEL_LUMA, 0, 0, presupuesto, ronda, sal, 4, &info);
+        n = ml_leer(bytes.data(), W, H, W, ML_PIXEL_LUMA, 0, modoUno, presupuesto, ronda, sal, 4, &info);
         ronda = info.siguiente_ronda;
         peorUs = std::max(peorUs, info.microsegundos);
         sumaUs += info.microsegundos;
