@@ -203,10 +203,13 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     } catch (_) {}
   }
 
-  /// Enfoca y mide la luz en el centro (al disparar, y de nuevo si la imagen
-  /// sigue borrosa): en el telefono los codigos se leian recien cuando la
-  /// imagen salia nitida.
-  Future<void> enfocarCentro() => enfocar(const Offset(0.5, 0.5));
+  /// Vuelve al enfoque automatico continuo (cancela un enfoque trabado en un
+  /// punto). Para cuando la imagen sigue borrosa mucho rato.
+  Future<void> reiniciarEnfoque() async {
+    try {
+      await _control?.setFocusMode(FocusMode.auto);
+    } catch (_) {}
+  }
 
   /// [punto] normalizado (0..1) sobre la vista previa.
   Future<void> enfocar(Offset punto) async {

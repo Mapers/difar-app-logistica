@@ -131,8 +131,10 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
     _leyoEnDisparo = false;
     _camara.esfuerzo = true; // todos los pasos del motor mientras se busca
     _cuadrosBorrosos = 0;
+    // Sin forzar el enfoque: enfocar un punto traba el foco ~5 s en Android y
+    // con re-enfoques seguidos la camara "barria" y salia borrosa (registro
+    // v0.8). Queda el enfoque automatico continuo.
     _ultimoEnfoque = DateTime.now();
-    unawaited(_camara.enfocarCentro());
     _desdeToque
       ..reset()
       ..start();
@@ -140,7 +142,15 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
     _detectarMantener?.cancel();
     _detectarMantener = Timer(_paraMantener, () {
       if (_dedoAbajo && mounted) {
-        setState(() => _sostenido = true);
+        // Si el toque ya termino (leyo o aviso "ilegible") pero el dedo sigue
+        // en el boton, se vuelve a armar: antes quedaba en "mantener" sin leer
+        // nada (registro v0.8: 30 s con codigos a la vista sin lecturas).
+        _finToque?.cancel();
+        setState(() {
+          _sostenido = true;
+          _armado = true;
+        });
+        _camara.esfuerzo = true;
         _camara.buscarTodos = true; // el motor busca todos los del cuadro
         registrar('DISPARO', 'mantener (todos los visibles)');
       }
@@ -258,7 +268,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
       // La camara ve un codigo pero no puede decodificar su contenido.
       _leyoEnDisparo = true; // un solo aviso por disparo
       _noSeLeyo('Codigo ilegible');
-      if (!_sostenido) _desarmar();
+      if (!_sostenido && !_dedoAbajo) _desarmar();
     }
 
     // Borrosa varios cuadros seguidos mientras se busca: enfocar de nuevo el
@@ -267,12 +277,13 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
       final n = captura.info?.nitidez ?? 10;
       _cuadrosBorrosos = n <= 4 ? _cuadrosBorrosos + 1 : 0;
       final ahora = DateTime.now();
-      if (_cuadrosBorrosos >= 8 && ahora.difference(_ultimoEnfoque) > const Duration(milliseconds: 1200)) {
+      // ~3 s borrosa: reiniciar el enfoque automatico continuo (sin trabarlo).
+      if (_cuadrosBorrosos >= 25 && ahora.difference(_ultimoEnfoque) > const Duration(seconds: 3)) {
         _cuadrosBorrosos = 0;
         _ultimoEnfoque = ahora;
-        unawaited(_camara.enfocarCentro());
+        unawaited(_camara.reiniciarEnfoque());
         if (_consejo == null) _mostrarConsejo('Enfocando: manten quieto el telefono');
-        registrar('ENFOQUE', 'imagen borrosa (nitidez $n): enfocar el centro de nuevo');
+        registrar('ENFOQUE', 'imagen borrosa (nitidez $n) 3 s: reiniciar enfoque automatico');
       }
     }
 
