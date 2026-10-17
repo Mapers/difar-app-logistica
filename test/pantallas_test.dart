@@ -1,4 +1,5 @@
 import 'package:difar_logistica/core/codigos.dart';
+import 'package:difar_logistica/core/proyeccion.dart';
 import 'package:difar_logistica/lectura/ajustes.dart';
 import 'package:difar_logistica/lectura/pantalla_ajustes.dart';
 import 'package:difar_logistica/lectura/pantalla_escaner.dart';
@@ -31,10 +32,10 @@ void main() {
 
     await tester.pumpWidget(MaterialApp(home: PantallaAjustes(ajustes: a)));
     await tester.tap(find.text(GrupoFormatos.productos.etiqueta));
-    await tester.tap(find.text('Lectura continua'));
+    await tester.tap(find.text('Multi'));
     await tester.pump();
     expect(a.grupo, GrupoFormatos.productos);
-    expect(a.continuo, isFalse);
+    expect(a.modo, ModoLectura.multi);
   });
 
   test('ventana de lectura: ancha para 1D, mas alta para 2D', () {
@@ -44,5 +45,13 @@ void main() {
     expect(v1.width, closeTo(344, 0.1));
     expect(v1.height, lessThan(v2.height));
     expect(const Offset(0, 0) & pantalla, isA<Rect>().having((r) => r.contains(v1.center), 'contiene', isTrue));
+  });
+
+  test('proyeccion a BoxFit.cover: imagen 720x1280 en vista 360x800', () {
+    // escala = max(360/720, 800/1280) = 0.625 -> imagen 450x800, sobran 45 px por lado.
+    final p = proyectarACubrir(const [Offset(360, 640), Offset(72, 0)], const Size(720, 1280), const Size(360, 800));
+    expect(p[0], const Offset(180, 400));
+    expect(p[1], const Offset(0, 0));
+    expect(proyectarACubrir(const [Offset(1, 1)], Size.zero, const Size(1, 1)), isEmpty);
   });
 }

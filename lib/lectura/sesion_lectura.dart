@@ -50,6 +50,9 @@ class SesionLectura extends ChangeNotifier {
   final List<ItemLeido> _items = [];
   List<ItemLeido> get items => List.unmodifiable(_items);
 
+  /// Cantidad contada de cada codigo (0 si no esta en la lista).
+  Map<String, int> get cantidades => {for (final i in _items) i.codigo: i.cantidad};
+
   int get totalUnidades => _items.fold(0, (s, i) => s + i.cantidad);
 
   /// Ultima vez que cada codigo paso por la camara (aunque se haya ignorado),

@@ -34,13 +34,17 @@ class PantallaAjustes extends StatelessWidget {
               ),
             ),
             const _Titulo('Modo'),
-            SwitchListTile(
-              title: const Text('Lectura continua'),
-              subtitle: Text(ajustes.continuo
-                  ? 'Sigue leyendo sin tocar la pantalla (conteo / inventario).'
-                  : 'Se detiene tras cada codigo; toca "Leer otro" para seguir.'),
-              value: ajustes.continuo,
-              onChanged: (v) => ajustes.continuo = v,
+            RadioGroup<ModoLectura>(
+              groupValue: ajustes.modo,
+              onChanged: (v) {
+                if (v != null) ajustes.modo = v;
+              },
+              child: Column(
+                children: [
+                  for (final m in ModoLectura.values)
+                    RadioListTile<ModoLectura>(value: m, title: Text(m.etiqueta), subtitle: Text(m.descripcion)),
+                ],
+              ),
             ),
             SwitchListTile(
               title: const Text('Sumar repetidos'),

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../core/codigos.dart';
+import '../core/proyeccion.dart';
 import 'ajustes.dart';
 import 'aviso_lectura.dart';
 import 'pantalla_ajustes.dart';
@@ -19,6 +20,10 @@ import 'sesion_lectura.dart';
 ///   los filtra [SesionLectura] (asi un codigo nuevo se lee al instante);
 /// * resolucion 1280x720 en Android (la de fabrica, 640x480, no alcanza para
 ///   codigos chicos o lejanos) y autozoom opcional.
+///
+/// Modo Multi (como MatrixScan): sin ventana, cada cuadro puede traer varios
+/// codigos; todos se cuentan a la vez (una sola vez cada uno mientras sigan a
+/// la vista) y se marcan encima de la imagen con su cantidad.
 class PantallaEscaner extends StatefulWidget {
   const PantallaEscaner({super.key, required this.sesion, required this.ajustes});
 
@@ -33,6 +38,11 @@ class _PantallaEscanerState extends State<PantallaEscaner> {
   late MobileScannerController _camara;
   late GrupoFormatos _grupoCamara;
   late bool _autoZoomCamara;
+  late bool _multiCamara;
+
+  /// Codigos del ultimo cuadro en modo Multi, para dibujarlos encima.
+  final _cuadroMulti = ValueNotifier<_CuadroMulti?>(null);
+  Timer? _limpiarMulti;
 
   ItemLeido? _ultimo;
   ResultadoLectura? _ultimoResultado;
@@ -52,10 +62,12 @@ class _PantallaEscanerState extends State<PantallaEscaner> {
   MobileScannerController _crearCamara() {
     _grupoCamara = _ajustes.grupo;
     _autoZoomCamara = _ajustes.autoZoom;
+    _multiCamara = _ajustes.modo == ModoLectura.multi;
     return MobileScannerController(
       formats: _grupoCamara.formatos,
       detectionSpeed: DetectionSpeed.unrestricted,
-      cameraResolution: const Size(1280, 720),
+      // En Multi los codigos salen mas chicos (hay varios en el cuadro): mas resolucion.
+      cameraResolution: _multiCamara ? const Size(1920, 1080) : const Size(1280, 720),
       autoZoom: _autoZoomCamara,
     );
   }
@@ -63,18 +75,56 @@ class _PantallaEscanerState extends State<PantallaEscaner> {
   @override
   void dispose() {
     _apagarDestello?.cancel();
+    _limpiarMulti?.cancel();
+    _cuadroMulti.dispose();
     unawaited(_camara.dispose());
     super.dispose();
   }
 
   void _alDetectar(BarcodeCapture captura) {
     if (_enPausa) return;
+    if (_multiCamara) return _alDetectarMulti(captura);
     for (final b in captura.barcodes) {
       final valor = b.rawValue;
       if (valor == null || valor.isEmpty) continue;
       _registrar(valor, nombreFormato(b.format));
-      if (!_ajustes.continuo) break;
+      if (_ajustes.modo == ModoLectura.unoAUno) break;
     }
+  }
+
+  void _alDetectarMulti(BarcodeCapture captura) {
+    widget.sesion.espera = Duration(milliseconds: _ajustes.esperaMs);
+    final ahora = DateTime.now();
+    final marcas = <_Marca>[];
+    var nuevos = 0;
+    var sumados = 0;
+    for (final b in captura.barcodes) {
+      final valor = b.rawValue;
+      if (valor == null || valor.isEmpty) continue;
+      final r = widget.sesion.registrar(valor, nombreFormato(b.format), ahora,
+          sumarRepetidos: _ajustes.sumarRepetidos);
+      if (r == ResultadoLectura.nuevo) nuevos++;
+      if (r == ResultadoLectura.sumado) sumados++;
+      if (b.corners.length == 4) {
+        marcas.add(_Marca(valor, b.corners, r == ResultadoLectura.ignorado ? null : r));
+      }
+    }
+    _cuadroMulti.value = _CuadroMulti(captura.size, marcas, widget.sesion.cantidades);
+    // Si la camara deja de ver codigos, se borran las marcas.
+    _limpiarMulti?.cancel();
+    _limpiarMulti = Timer(const Duration(milliseconds: 350), () => _cuadroMulti.value = null);
+
+    if (nuevos + sumados == 0) return;
+    // Un solo pitido por cuadro, aunque entren varios codigos juntos.
+    unawaited(AvisoLectura.leido(
+      sonido: _ajustes.sonido,
+      vibrar: _ajustes.vibrar,
+      repetido: nuevos == 0,
+    ));
+    setState(() {
+      _ultimo = widget.sesion.items.first;
+      _ultimoResultado = nuevos > 0 ? ResultadoLectura.nuevo : ResultadoLectura.sumado;
+    });
   }
 
   void _registrar(String valor, String formato) {
@@ -98,7 +148,7 @@ class _PantallaEscanerState extends State<PantallaEscaner> {
       if (mounted) setState(() => _destello = false);
     });
 
-    if (!_ajustes.continuo) {
+    if (_ajustes.modo == ModoLectura.unoAUno) {
       setState(() => _enPausa = true);
       unawaited(_camara.pause());
     }
@@ -116,17 +166,32 @@ class _PantallaEscanerState extends State<PantallaEscaner> {
     if (!mounted) return;
     await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => pantalla));
     if (!mounted) return;
-    // Si en Ajustes cambiaron los formatos o el autozoom, hay que recrear la camara.
-    if (_grupoCamara != _ajustes.grupo || _autoZoomCamara != _ajustes.autoZoom) {
-      final vieja = _camara;
-      setState(() {
-        _camara = _crearCamara();
-        _zoom = 0;
-      });
-      await vieja.dispose();
-    } else if (!_enPausa) {
-      await _camara.start();
+    if (!await _recrearSiCambio() && !_enPausa) await _camara.start();
+  }
+
+  /// Formatos, autozoom y entrar/salir de Multi se fijan al crear la camara:
+  /// si cambiaron, se recrea. Devuelve true si la recreo.
+  Future<bool> _recrearSiCambio() async {
+    final multi = _ajustes.modo == ModoLectura.multi;
+    if (_grupoCamara == _ajustes.grupo && _autoZoomCamara == _ajustes.autoZoom && _multiCamara == multi) {
+      return false;
     }
+    final vieja = _camara;
+    _cuadroMulti.value = null;
+    setState(() {
+      _camara = _crearCamara();
+      _zoom = 0;
+      _enPausa = false;
+    });
+    await vieja.dispose();
+    return true;
+  }
+
+  Future<void> _cambiarModo(ModoLectura modo) async {
+    _ajustes.modo = modo;
+    if (await _recrearSiCambio()) return;
+    if (_enPausa && modo != ModoLectura.unoAUno) await _seguir();
+    setState(() {});
   }
 
   Future<void> _ingresoManual() async {
@@ -155,23 +220,67 @@ class _PantallaEscanerState extends State<PantallaEscaner> {
             MobileScanner(
               key: ObjectKey(_camara),
               controller: _camara,
-              scanWindow: ventana,
+              scanWindow: _multiCamara ? null : ventana,
               tapToFocus: true,
               onDetect: _alDetectar,
               errorBuilder: (context, error) => _ErrorCamara(error: error),
             ),
-            IgnorePointer(
-              child: CustomPaint(
-                painter: _MarcoLectura(
-                  ventana: ventana,
-                  color: _destello
-                      ? (_ultimoResultado == ResultadoLectura.sumado ? Colors.amber : Colors.greenAccent)
-                      : Colors.white,
+            if (_multiCamara)
+              IgnorePointer(
+                child: ValueListenableBuilder(
+                  valueListenable: _cuadroMulti,
+                  builder: (context, cuadro, _) => CustomPaint(painter: _MarcasMulti(cuadro)),
+                ),
+              )
+            else ...[
+              IgnorePointer(
+                child: CustomPaint(
+                  painter: _MarcoLectura(
+                    ventana: ventana,
+                    color: _destello
+                        ? (_ultimoResultado == ResultadoLectura.sumado ? Colors.amber : Colors.greenAccent)
+                        : Colors.white,
+                  ),
                 ),
               ),
+              if (!_enPausa) _Laser(ventana: ventana),
+            ],
+            SafeArea(
+              child: Column(
+                children: [
+                  _barraSuperior(),
+                  SegmentedButton<ModoLectura>(
+                    segments: [
+                      for (final m in ModoLectura.values)
+                        ButtonSegment(value: m, label: Text(m.etiqueta)),
+                    ],
+                    selected: {_ajustes.modo},
+                    showSelectedIcon: false,
+                    onSelectionChanged: (s) => _cambiarModo(s.first),
+                    style: SegmentedButton.styleFrom(
+                      backgroundColor: Colors.black45,
+                      foregroundColor: Colors.white,
+                      selectedBackgroundColor: Colors.white,
+                      selectedForegroundColor: Colors.black,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                  if (_multiCamara)
+                    ValueListenableBuilder(
+                      valueListenable: _cuadroMulti,
+                      builder: (context, cuadro, _) => Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          cuadro == null || cuadro.marcas.isEmpty
+                              ? 'Apunta a varios codigos a la vez'
+                              : '${cuadro.marcas.length} codigos a la vista',
+                          style: const TextStyle(color: Colors.white, shadows: [Shadow(blurRadius: 4)]),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
-            if (!_enPausa) _Laser(ventana: ventana),
-            SafeArea(child: _barraSuperior()),
             Positioned(
               left: 0,
               right: 0,
@@ -276,6 +385,79 @@ Rect ventanaLectura(Size pantalla, GrupoFormatos grupo) {
     width: ancho,
     height: alto,
   );
+}
+
+class _Marca {
+  _Marca(this.valor, this.esquinas, this.resultado);
+
+  final String valor;
+  final List<Offset> esquinas;
+
+  /// null = ya estaba contado y sigue a la vista.
+  final ResultadoLectura? resultado;
+}
+
+class _CuadroMulti {
+  _CuadroMulti(this.imagen, this.marcas, this.cantidades);
+
+  final Size imagen;
+  final List<_Marca> marcas;
+  final Map<String, int> cantidades;
+}
+
+/// Dibuja cada codigo visible: verde = recien contado, ambar = sumado,
+/// azul = ya contado (sigue a la vista). Etiqueta con la cantidad.
+class _MarcasMulti extends CustomPainter {
+  _MarcasMulti(this.cuadro);
+
+  final _CuadroMulti? cuadro;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = cuadro;
+    if (c == null) return;
+    for (final m in c.marcas) {
+      final puntos = proyectarACubrir(m.esquinas, c.imagen, size);
+      if (puntos.length != 4) continue;
+      final color = switch (m.resultado) {
+        ResultadoLectura.nuevo => Colors.greenAccent,
+        ResultadoLectura.sumado => Colors.amber,
+        _ => Colors.lightBlueAccent,
+      };
+      final forma = Path()..addPolygon(puntos, true);
+      canvas.drawPath(forma, Paint()..color = color.withValues(alpha: 0.3));
+      canvas.drawPath(
+        forma,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3,
+      );
+
+      final texto = TextPainter(
+        text: TextSpan(
+          text: '${m.valor}  x${c.cantidades[m.valor] ?? 0}',
+          style: const TextStyle(color: Colors.black, fontSize: 12, fontWeight: FontWeight.w700),
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+        ellipsis: '…',
+      )..layout(maxWidth: 220);
+      final arriba = puntos.reduce((a, b) => a.dy < b.dy ? a : b);
+      final centroX = puntos.map((p) => p.dx).reduce((a, b) => a + b) / 4;
+      final caja = Rect.fromCenter(
+        center: Offset(centroX, arriba.dy - texto.height / 2 - 8),
+        width: texto.width + 12,
+        height: texto.height + 6,
+      );
+      canvas.drawRRect(RRect.fromRectAndRadius(caja, const Radius.circular(6)), Paint()..color = color);
+      texto.paint(canvas, caja.topLeft + const Offset(6, 3));
+      texto.dispose();
+    }
+  }
+
+  @override
+  bool shouldRepaint(_MarcasMulti old) => old.cuadro != cuadro;
 }
 
 class _MarcoLectura extends CustomPainter {

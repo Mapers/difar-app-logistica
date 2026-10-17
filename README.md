@@ -6,11 +6,18 @@ Android, Apple Vision en iOS). Gratis y sin licencia por dispositivo.
 
 ## Que hace
 
+- **Tres modos** (selector arriba en la camara):
+  - **Uno a uno**: se detiene tras cada lectura ("Leer otro" para seguir).
+  - **Continuo**: un codigo a la vez dentro del recuadro, sin tocar nada.
+  - **Multi** (como MatrixScan de Scandit): lee **todos los codigos visibles a
+    la vez** en el mismo cuadro, los marca encima de la imagen con su cantidad
+    (verde = recien contado, ambar = sumado, azul = ya contado) y cuenta cada
+    uno una sola vez mientras siga a la vista. Usa 1920x1080 para que los
+    codigos chicos de una estanteria o caja se lean.
 - **Lectura continua**: apuntas y lee; no hay que tocar la pantalla. Pitido +
   vibracion en cada lectura (verde = nuevo, ambar = repetido sumado).
 - **Conteo**: agrupa por codigo y suma cantidades. Mantener la etiqueta frente
   a la camara **no** la cuenta dos veces (espera configurable, 1.5 s por defecto).
-- **Modo una a una**: se detiene tras cada lectura ("Leer otro" para seguir).
 - **Lista**: sumar/restar/editar cantidad, deslizar para borrar, vaciar y
   **compartir CSV** (separado por `;`, abre directo en Excel). La lista se
   guarda en el telefono y no se pierde al cerrar la app.
@@ -44,8 +51,9 @@ Android minimo: 6.0 (API 23). iOS: el permiso de camara ya esta en `Info.plist`.
 lib/
   main.dart                     arranque, tema, carga de ajustes y sesion
   core/codigos.dart             grupos de formatos, nombres, digito GS1
+  core/proyeccion.dart          esquinas del codigo (imagen) -> pantalla (BoxFit.cover)
   lectura/
-    pantalla_escaner.dart       camara, ventana, laser, linterna, zoom, ultimo leido
+    pantalla_escaner.dart       camara, modos, ventana, laser, marcas Multi, linterna, zoom
     sesion_lectura.dart         lista de lecturas, anti-repetidos, CSV, guardado
     ajustes.dart                preferencias (SharedPreferences)
     pantalla_ajustes.dart       pantalla de ajustes
@@ -57,8 +65,6 @@ lib/
 
 - Buscar el codigo en el catalogo de DIFAR (`GET /articulos`) y mostrar
   nombre/stock al leer, con el login de la app principal.
-- Varios codigos a la vez en un mismo cuadro (MatrixScan) con marcas sobre
-  cada codigo.
 - Si hiciera falta lo maximo (etiquetas danadas, muy lejos, muy rapido), el
   SDK comercial de Scandit tiene plugin oficial de Flutter, pero es de pago
   por dispositivo.
