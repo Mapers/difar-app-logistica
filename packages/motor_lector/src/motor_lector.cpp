@@ -98,6 +98,7 @@ struct Lector {
   // Los pasos corren en paralelo: lo compartido va protegido.
   std::mutex cerrojo;
   std::atomic<bool> hayUno{false};
+  std::atomic<int> cuantos{0}; // codigos distintos leidos hasta ahora
   std::atomic<int> ilegibles{0};
 
   // [preparada]: la imagen fue procesada (contraste, normalizacion,
@@ -137,6 +138,7 @@ struct Lector {
       if (!repetido) {
         leidos.push_back({std::move(b), paso, t, invertido});
         hayUno = true;
+        cuantos++;
       }
     }
   }
@@ -249,8 +251,8 @@ struct Trabajo {
     }
     tiempos[paso] = std::max(1, usado() - antes);
     pasosHechos++;
-    if (lector.listo()) {
-      // Despierta a ml_leer, que espera el primer codigo (no a todos los hilos).
+    if (lector.cuantos.load() > 0) {
+      // Despierta a ml_leer, que espera el primer codigo nuevo (no a todos los hilos).
       std::lock_guard<std::mutex> l(espera);
       aviso.notify_all();
     }
@@ -334,9 +336,15 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     if (t->est.quemados >= 3 || t->est.contraste < 30 || t->est.brillo < 70) adelantar(ML_PASO_REFLEJOS);
 
     t->hacer(ML_PASO_RAPIDO);
+    const int delRapido = t->lector.cuantos.load();
 
     const int n = (int)dificiles.size();
-    if (t->lector.listo() || (modo & ML_MODO_SOLO_RAPIDO)) {
+    // Buscando todos: si el rapido ya leyo, el cuadro vuelve enseguida; los
+    // pasos dificiles corren 1 de cada 3 cuadros igual, por si al lado de los
+    // faciles hay uno dificil. (En el telefono, esperar a todos los pasos con
+    // el codigo ya leido dejaba cuadros de 350-650 ms.)
+    const bool rapidoAlcanza = t->lector.multiple && delRapido > 0 && ronda % 3 != 0;
+    if (t->lector.listo() || rapidoAlcanza || (modo & ML_MODO_SOLO_RAPIDO)) {
       info->siguiente_ronda = ronda + 1;
     } else if (hilos > 1) {
       // En paralelo: todos los pasos dificiles a la vez, repartidos en los
@@ -355,7 +363,9 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
         }).detach();
       }
       std::unique_lock<std::mutex> l(t->espera);
-      t->aviso.wait(l, [&] { return t->trabajando == 0 || t->lector.listo(); });
+      // Vuelve apenas algun paso lee algo nuevo; los demas terminan solos y se
+      // descartan (el proximo cuadro vuelve a probar todo).
+      t->aviso.wait(l, [&] { return t->trabajando == 0 || t->lector.cuantos.load() > delRapido; });
       info->siguiente_ronda = ronda + 1;
     } else {
       // Uno tras otro, con tope de tiempo; el siguiente cuadro sigue donde quedo.
