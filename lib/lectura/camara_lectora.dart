@@ -8,6 +8,7 @@ import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart
 import 'package:motor_lector/motor_lector.dart';
 
 import '../core/codigos.dart';
+import '../core/registro.dart';
 import 'ajustes.dart';
 import 'fusion.dart';
 
@@ -70,6 +71,15 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   /// Se encendio la linterna sola por poca luz (para avisar una vez).
   bool linternaAutomatica = false;
 
+  /// Medicion del ultimo cuadro (para el registro de fallos).
+  InfoMotor? ultimaInfo;
+
+  // Estadisticas para el registro (se vuelcan cada 2 s).
+  final _reloj = Stopwatch();
+  int _recibidos = 0, _procesados = 0, _cuadrosConCodigo = 0;
+  int _msCppTotal = 0, _msCppMax = 0, _msMlTotal = 0, _msMlMax = 0;
+  bool _tamanoRegistrado = false;
+
   bool get lista => _control?.value.isInitialized ?? false;
   bool get encendida => _encendida;
 
@@ -108,13 +118,22 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       await control.startImageStream(_alCuadro);
       error = null;
       permisoDenegado = false;
+      _tamanoRegistrado = false;
+      _reloj
+        ..reset()
+        ..start();
+      registrar('CAMARA', 'encendida ${multiple ? "multiple" : "uno"} giro=${trasera.sensorOrientation} '
+          'vista=${control.value.previewSize} zoom=${_zoomMin.toStringAsFixed(1)}-${_zoomMax.toStringAsFixed(1)} '
+          'motor=${ajustes.motor.name} formatos=${ajustes.grupo.name}');
     } on CameraException catch (e) {
       permisoDenegado = e.code.contains('AccessDenied') || e.code.contains('Permission');
       error = permisoDenegado ? null : '${e.code}: ${e.description ?? ''}';
       _encendida = false;
+      registrar('ERROR', 'camara ${e.code}: ${e.description}');
     } catch (e) {
       error = '$e';
       _encendida = false;
+      registrar('ERROR', 'camara $e');
     }
     notifyListeners();
   }
@@ -131,6 +150,10 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Apaga la camara (libera el sensor para otra pantalla o ahorra bateria).
   Future<void> apagar() async {
+    if (_encendida) {
+      _volcarEstadisticas();
+      registrar('CAMARA', 'apagada');
+    }
     _encendida = false;
     final control = _control;
     _control = null;
@@ -146,6 +169,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> cambiarLinterna([bool? encender]) async {
     linterna = encender ?? !linterna;
     linternaAutomatica = false;
+    registrar('CAMARA', 'linterna ${linterna ? "encendida" : "apagada"}');
     notifyListeners();
     try {
       await _control?.setFlashMode(linterna ? FlashMode.torch : FlashMode.off);
@@ -171,6 +195,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   // ------------------------------------------------------------ cuadros
 
   void _alCuadro(CameraImage img) {
+    _recibidos++;
     if (_procesando || !_encendida) return;
     _procesando = true;
     _procesar(img).catchError((Object e) => debugPrint('Lector: $e')).whenComplete(() => _procesando = false);
@@ -206,15 +231,46 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       ),
     ));
 
+    final t0 = DateTime.now();
+    int? msCpp, msMl;
+    final esperaCpp = cpp?.then((v) {
+      msCpp = DateTime.now().difference(t0).inMilliseconds;
+      return v;
+    });
+    final esperaMl = ml?.then((v) {
+      msMl = DateTime.now().difference(t0).inMilliseconds;
+      return v;
+    });
     ResultadoMotor? r;
     List<mlkit.Barcode> lm = const [];
     try {
-      r = await cpp;
-    } catch (_) {}
+      r = await esperaCpp;
+    } catch (e) {
+      registrar('ERROR', 'motor C++: $e');
+    }
     try {
-      lm = await ml ?? const [];
-    } catch (_) {}
+      lm = await esperaMl ?? const [];
+    } catch (e) {
+      registrar('ERROR', 'ML Kit: $e');
+    }
     if (r != null) _ronda = r.info.siguienteRonda;
+    ultimaInfo = r?.info ?? ultimaInfo;
+    if (!_tamanoRegistrado) {
+      _tamanoRegistrado = true;
+      registrar('CAMARA', 'cuadro ${img.width}x${img.height} fila=${plano.bytesPerRow} '
+          'planos=${img.planes.length} bytes=${plano.bytes.length}');
+    }
+    _procesados++;
+    if (msCpp != null) {
+      _msCppTotal += msCpp!;
+      if (msCpp! > _msCppMax) _msCppMax = msCpp!;
+    }
+    if (msMl != null) {
+      _msMlTotal += msMl!;
+      if (msMl! > _msMlMax) _msMlMax = msMl!;
+    }
+    if ((r?.codigos.isNotEmpty ?? false) || lm.isNotEmpty) _cuadrosConCodigo++;
+    if (_reloj.elapsedMilliseconds >= 2000) _volcarEstadisticas();
 
     final deCpp = [
       for (final c in r?.codigos ?? const <CodigoMotor>[])
@@ -248,12 +304,31 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  void _volcarEstadisticas() {
+    final seg = _reloj.elapsedMilliseconds / 1000;
+    if (_procesados > 0 && seg > 0) {
+      final i = ultimaInfo;
+      registrar('CUADROS', 'en ${seg.toStringAsFixed(1)}s: recibidos=$_recibidos procesados=$_procesados '
+          '(${(_procesados / seg).toStringAsFixed(1)}/s) con_codigo=$_cuadrosConCodigo '
+          'C++ prom=${_msCppTotal ~/ _procesados}ms max=${_msCppMax}ms '
+          'MLKit prom=${_msMlTotal ~/ _procesados}ms max=${_msMlMax}ms'
+          '${i == null ? '' : ' brillo=${i.brillo} contraste=${i.contraste} reflejo=${i.quemados}%'} '
+          'linterna=${linterna ? "si" : "no"} zoom=${aumento.toStringAsFixed(1)}');
+    }
+    _recibidos = _procesados = _cuadrosConCodigo = 0;
+    _msCppTotal = _msCppMax = _msMlTotal = _msMlMax = 0;
+    _reloj
+      ..reset()
+      ..start();
+  }
+
   /// Con poca luz sostenida (~1 s) enciende la linterna sola, si esta activado.
   void _linternaAutomatica(InfoMotor info) {
     if (!ajustes.linternaAuto || linterna) return;
     _cuadrosOscuros = info.sugerirLinterna ? _cuadrosOscuros + 1 : 0;
     if (_cuadrosOscuros >= 12) {
       _cuadrosOscuros = 0;
+      registrar('CAMARA', 'poca luz (brillo ${info.brillo}): linterna automatica');
       unawaited(cambiarLinterna(true).then((_) {
         linternaAutomatica = true;
         notifyListeners();

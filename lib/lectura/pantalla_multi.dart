@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../core/proyeccion.dart';
+import '../core/registro.dart';
 import 'ajustes.dart';
 import 'aviso_lectura.dart';
 import 'camara_comun.dart';
@@ -33,6 +34,11 @@ class _PantallaMultiState extends State<PantallaMulti> {
   /// traer un grupo algo distinto; juntarlos evita que las marcas parpadeen.
   static const _memoria = Duration(milliseconds: 400);
   final _recientes = <String, (CodigoVisto, DateTime)>{};
+
+  /// Para el registro: desde cuando se ven codigos sin interrupcion, y
+  /// cuantos distintos se vieron en ese lapso.
+  DateTime? _desdeApuntar;
+  int _maxVistos = 0;
 
   /// Contados en este conteo (aunque ya estuvieran en la lista de antes).
   final _contados = <String>{};
@@ -65,7 +71,19 @@ class _PantallaMultiState extends State<PantallaMulti> {
       _recientes[c.valor] = (c, ahora);
     }
     _recientes.removeWhere((_, v) => ahora.difference(v.$2) > _memoria);
-    if (_recientes.isEmpty) return; // el temporizador borra las marcas
+    if (_recientes.isEmpty) {
+      if (_desdeApuntar != null) registrar('VISTOS', 'se dejo de ver codigos');
+      _desdeApuntar = null;
+      _maxVistos = 0;
+      return; // el temporizador borra las marcas
+    }
+    _desdeApuntar ??= ahora;
+    if (_recientes.length > _maxVistos) {
+      // Cuantos codigos distintos aparecieron y en cuanto tiempo desde el primero.
+      _maxVistos = _recientes.length;
+      registrar('VISTOS', '$_maxVistos codigos a ${ahora.difference(_desdeApuntar!).inMilliseconds}ms del primero '
+          '(${captura.codigos.map((c) => c.fuente).toSet().join(",")})');
+    }
     _cuadro.value = _CuadroMulti(captura.imagen, [for (final v in _recientes.values) v.$1]);
     _limpiar?.cancel();
     _limpiar = Timer(const Duration(milliseconds: 400), () => _cuadro.value = null);
@@ -88,6 +106,11 @@ class _PantallaMultiState extends State<PantallaMulti> {
     }
     // Repinta para que los recien contados pasen a verde.
     _cuadro.value = _CuadroMulti(cuadro.imagen, cuadro.vistos);
+    if (nuevos > 0) {
+      registrar('LOTE', '+$nuevos (${manual ? "disparador" : "auto"}) a_la_vista=${cuadro.vistos.length} '
+          'total_conteo=${_contados.length}: '
+          '${cuadro.vistos.map((v) => '${v.valor}[${v.formato}/${v.fuente}]').join(' ')}');
+    }
     if (nuevos == 0) return;
     // Un solo pitido por lote, aunque entren muchos codigos juntos.
     unawaited(AvisoLectura.leido(sonido: widget.ajustes.sonido, vibrar: widget.ajustes.vibrar));
@@ -99,6 +122,9 @@ class _PantallaMultiState extends State<PantallaMulti> {
   }
 
   void _sinCodigos() {
+    final i = _camara.ultimaInfo;
+    registrar('FALLO', 'multiple: disparador sin codigos a la vista'
+        '${i == null ? '' : ' brillo=${i.brillo} reflejo=${i.quemados}%'}');
     unawaited(AvisoLectura.fallo(sonido: widget.ajustes.sonido, vibrar: widget.ajustes.vibrar));
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()

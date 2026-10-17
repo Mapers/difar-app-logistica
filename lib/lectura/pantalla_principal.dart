@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../core/proyeccion.dart';
+import '../core/registro.dart';
 import 'ajustes.dart';
 import 'aviso_lectura.dart';
 import 'camara_comun.dart';
@@ -58,6 +59,9 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
   /// leer nada, suena el aviso de error.
   bool _leyoEnDisparo = false;
   bool _error = false;
+
+  /// Momento en que se toco el boton (para medir cuanto tarda la lectura).
+  final _desdeToque = Stopwatch();
 
   Timer? _finToque;
   Timer? _detectarMantener;
@@ -120,10 +124,16 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
       _error = false;
     });
     _leyoEnDisparo = false;
+    _desdeToque
+      ..reset()
+      ..start();
     _finToque?.cancel();
     _detectarMantener?.cancel();
     _detectarMantener = Timer(_paraMantener, () {
-      if (_dedoAbajo && mounted) setState(() => _sostenido = true);
+      if (_dedoAbajo && mounted) {
+        setState(() => _sostenido = true);
+        registrar('DISPARO', 'mantener');
+      }
     });
   }
 
@@ -145,6 +155,11 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
   /// Aviso de error: tono grave doble, doble vibracion, borde rojo y mensaje.
   void _noSeLeyo(String motivo) {
     if (!mounted) return;
+    final i = _camara.ultimaInfo;
+    registrar('FALLO', '$motivo tras ${_desdeToque.elapsedMilliseconds}ms '
+        '(${_sostenido ? "mantener" : "toque"})'
+        '${i == null ? '' : ' brillo=${i.brillo} contraste=${i.contraste} reflejo=${i.quemados}% pasos=${i.pasos}'}'
+        ' linterna=${_camara.linterna ? "si" : "no"}');
     unawaited(AvisoLectura.fallo(sonido: _ajustes.sonido, vibrar: _ajustes.vibrar));
     setState(() => _error = true);
     _quitarError?.cancel();
@@ -204,13 +219,13 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
           // Cada toque es intencional: cuenta aunque sea el mismo de recien.
           forzar: !_sostenido);
       if (leido != ResultadoLectura.ignorado) {
-        _alLeer(v.valor, leido);
+        _alLeer(v.valor, leido, v, captura);
       } else {
         leido = null;
         if (!_sostenido) {
           // Toque sobre un codigo que ya esta y "Sumar repetidos" apagado: se
           // leyo bien, solo no se suma. Aviso suave, no de error.
-          _alLeer(v.valor, ResultadoLectura.sumado);
+          _alLeer(v.valor, ResultadoLectura.sumado, v, captura);
         }
       }
     } else if (_armado && !_leyoEnDisparo && apuntado == null && captura.ilegible) {
@@ -224,6 +239,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
     // barras quemadas, hay que cambiar el angulo.
     if (_armado && leido == null && (captura.info?.quemados ?? 0) >= 8 && _consejo == null) {
       _mostrarConsejo('Reflejo: inclina un poco el telefono');
+      registrar('CONSEJO', 'reflejo ${captura.info?.quemados}%: inclinar el telefono');
     }
 
     _cuadro.value = _Cuadro(captura.imagen, vistos, apuntado, leido);
@@ -231,8 +247,17 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
     _limpiarMarcas = Timer(const Duration(milliseconds: 350), () => _cuadro.value = null);
   }
 
-  void _alLeer(String valor, ResultadoLectura r) {
+  void _alLeer(String valor, ResultadoLectura r, [CodigoVisto? v, Captura? captura]) {
     _leyoEnDisparo = true;
+    final i = captura?.info;
+    registrar('LECTURA', '$valor ${v?.formato ?? ""} motor=${v?.fuente ?? "?"}'
+        '${(v?.detalle.isNotEmpty ?? false) ? " paso=${v!.detalle}" : ""} '
+        '${r == ResultadoLectura.nuevo ? "nuevo" : "sumado"} en ${_desdeToque.elapsedMilliseconds}ms '
+        '(${_sostenido ? "mantener" : "toque"}) a_la_vista=${captura?.codigos.length ?? 1}'
+        '${i == null ? '' : ' brillo=${i.brillo} reflejo=${i.quemados}% C++=${i.microsegundos ~/ 1000}ms'}');
+    _desdeToque
+      ..reset()
+      ..start();
     unawaited(AvisoLectura.leido(
       sonido: _ajustes.sonido,
       vibrar: _ajustes.vibrar,
@@ -265,10 +290,27 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
     _programarApagado();
   }
 
+  Future<void> _compartirRegistro() async {
+    final archivo = await Registro.instancia.paraCompartir();
+    if (!mounted) return;
+    if (archivo == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No hay registro todavia.')));
+      return;
+    }
+    await compartirArchivo(archivo, 'Registro del lector DIFAR');
+  }
+
+  Future<void> _borrarRegistro() async {
+    await Registro.instancia.borrar();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Registro borrado.')));
+  }
+
   Future<void> _ingresoManual() async {
     final codigo = await showDialog<String>(context: context, builder: (_) => const DialogoManual());
     if (codigo == null || codigo.isEmpty) return;
     _sesion.registrar(codigo, 'Manual', DateTime.now(), forzar: true);
+    registrar('MANUAL', codigo);
     setState(() => _resaltado = codigo);
   }
 
@@ -302,6 +344,8 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
               'manual' => _ingresoManual(),
               'csv' => compartirCsv(_sesion),
               'vaciar' => confirmarVaciar(context, _sesion),
+              'registro' => _compartirRegistro(),
+              'borrar_registro' => _borrarRegistro(),
               _ => _abrir(PantallaAjustes(ajustes: _ajustes)),
             },
             itemBuilder: (_) => const [
@@ -309,6 +353,9 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
               PopupMenuItem(value: 'csv', child: Text('Compartir CSV')),
               PopupMenuItem(value: 'vaciar', child: Text('Vaciar lista')),
               PopupMenuItem(value: 'ajustes', child: Text('Ajustes')),
+              PopupMenuDivider(),
+              PopupMenuItem(value: 'registro', child: Text('Compartir registro (log)')),
+              PopupMenuItem(value: 'borrar_registro', child: Text('Borrar registro')),
             ],
           ),
         ],

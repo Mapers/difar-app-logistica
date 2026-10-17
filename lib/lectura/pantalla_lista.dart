@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -15,6 +16,10 @@ Future<void> compartirCsv(SesionLectura sesion) async {
     fileNameOverrides: [nombre],
     subject: 'Lectura de codigos DIFAR',
   ));
+}
+
+Future<void> compartirArchivo(File archivo, String asunto) async {
+  await SharePlus.instance.share(ShareParams(files: [XFile(archivo.path, mimeType: 'text/plain')], subject: asunto));
 }
 
 Future<void> confirmarVaciar(BuildContext context, SesionLectura sesion) async {
