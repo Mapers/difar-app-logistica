@@ -35,6 +35,11 @@ class Ajustes extends ChangeNotifier {
   bool get altaResolucion => _prefs?.getBool('alta_resolucion') ?? true;
   set altaResolucion(bool v) => _set(() => _prefs?.setBool('alta_resolucion', v));
 
+  /// Exposicion propia: tiempo corto fijo (1/250 s) y sensibilidad segun el
+  /// brillo que mide el motor, para que el movimiento no borronee las barras.
+  bool get exposicionPropia => _prefs?.getBool('exposicion_propia') ?? true;
+  set exposicionPropia(bool v) => _set(() => _prefs?.setBool('exposicion_propia', v));
+
   /// Enciende la linterna sola cuando hay poca luz.
   bool get linternaAuto => _prefs?.getBool('linterna_auto') ?? true;
   set linternaAuto(bool v) => _set(() => _prefs?.setBool('linterna_auto', v));

@@ -39,6 +39,9 @@ flutter:
     platforms:
       android:
         ffiPlugin: true
+        # Camara nativa (CameraX + motor por JNI).
+        package: pe.difar.motor_lector
+        pluginClass: CamaraNativaPlugin
       ios:
         ffiPlugin: true
 

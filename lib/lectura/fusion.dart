@@ -50,6 +50,14 @@ Offset aVertical(Offset p, Size sensor, int giro) => switch (giro % 360) {
       _ => p,
     };
 
+/// Inverso de [aVertical]: de la imagen en vertical al sensor.
+Offset desdeVertical(Offset p, Size sensor, int giro) => switch (giro % 360) {
+      90 => Offset(p.dy, sensor.height - p.dx),
+      180 => Offset(sensor.width - p.dx, sensor.height - p.dy),
+      270 => Offset(sensor.width - p.dy, p.dx),
+      _ => p,
+    };
+
 /// Filtra lecturas dudosas, que se aceptan solo si se vieron igual otra vez
 /// en los ultimos [ventana] (un error no se repite igual; en el telefono los
 /// falsos salieron todos distintos entre si, y los reales se repetian pero

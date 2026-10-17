@@ -63,3 +63,11 @@ android {
         minSdk = 23
     }
 }
+
+dependencies {
+    // Camara nativa (la misma version que usa el plugin oficial camera_android_camerax).
+    def camerax = "1.6.0"
+    implementation "androidx.camera:camera-core:$camerax"
+    implementation "androidx.camera:camera-camera2:$camerax"
+    implementation "androidx.camera:camera-lifecycle:$camerax"
+}

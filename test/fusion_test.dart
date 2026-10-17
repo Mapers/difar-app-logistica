@@ -81,4 +81,12 @@ void main() {
     expect(f.confirmar([codigo('7750182000123', Simbologia.ean13, 'C++', paso: 'detector')]).single.valor,
         '7750182000123');
   });
+
+  test('desdeVertical deshace aVertical (tocar para enfocar)', () {
+    const sensor = Size(1920, 1080);
+    for (final giro in [0, 90, 180, 270]) {
+      const p = Offset(300, 200);
+      expect(desdeVertical(aVertical(p, sensor, giro), sensor, giro), p, reason: 'giro $giro');
+    }
+  });
 }

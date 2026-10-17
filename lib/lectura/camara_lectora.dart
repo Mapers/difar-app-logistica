@@ -1,9 +1,9 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:motor_lector/camara_nativa.dart';
 import 'package:motor_lector/motor_lector.dart';
 
 import '../core/codigos.dart';
@@ -30,10 +30,11 @@ class Captura {
   final List<List<Offset>> sinLeer;
 }
 
-/// Camara + motor de lectura propio (C++: zxing-cpp + preparacion de imagen),
-/// en su propio isolate; dentro del motor los pasos dificiles corren en
-/// paralelo en varios nucleos. Se procesa un cuadro a la vez; los que llegan
-/// mientras tanto se descartan, asi la vista previa nunca se atrasa.
+/// Camara nativa (CameraX) + motor de lectura propio (C++: zxing-cpp,
+/// OpenCV y preparacion de imagen), como los SDK comerciales: cada cuadro va
+/// del sensor al motor dentro de Android, sin copiar pixeles a Dart; aca solo
+/// llegan los codigos. Si el motor esta ocupado la camara descarta cuadros
+/// (se procesa siempre el ultimo), asi nunca se atrasa.
 class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   CamaraLectora(this.ajustes, {this.multiple = false});
 
@@ -44,36 +45,60 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Mientras sea true busca todos los codigos del cuadro aunque la camara
   /// sea de "uno" (al mantener presionado el boton se leen todos a la vez).
-  bool buscarTodos = false;
+  bool get buscarTodos => _buscarTodos;
+  set buscarTodos(bool v) {
+    if (v == _buscarTodos) return;
+    _buscarTodos = v;
+    _configurar();
+  }
+
+  bool _buscarTodos = false;
 
   /// Con el boton presionado (o en conteo multiple): todos los pasos del
   /// motor. Sin disparar solo el rapido, para mostrar los recuadros sin
   /// gastar procesador ni bateria.
-  bool esfuerzo = false;
+  bool get esfuerzo => _esfuerzo;
+  set esfuerzo(bool v) {
+    if (v == _esfuerzo) return;
+    _esfuerzo = v;
+    _configurar();
+  }
+
+  bool _esfuerzo = false;
 
   /// Tope de tiempo por cuadro, solo si el motor corre uno tras otro (en
   /// paralelo prueba todo en cada cuadro).
   static const presupuestoUs = 45000;
 
-  CameraController? _control;
-  CameraController? get control => _control;
-  MotorLector? _motor;
+  int get _modo =>
+      (multiple ? ModoMotor.todos | ModoMotor.cuadroCompleto : 0) |
+      (_buscarTodos ? ModoMotor.todos : 0) |
+      (_esfuerzo ? ModoMotor.intercalar : ModoMotor.soloRapido);
+
+  void _configurar() {
+    if (!_encendida) return;
+    unawaited(CamaraNativa.configurar(modo: _modo, formatos: ajustes.grupo.mascaraMotor,
+        exposicionPropia: ajustes.exposicionPropia).catchError((Object _) {}));
+  }
+
+  DatosCamara? _datos;
+
+  /// Datos de la camara encendida (textura de la vista previa).
+  DatosCamara? get datos => _datos;
+  StreamSubscription<CuadroNativo>? _suscripcion;
   final _fusion = Fusion();
   final _capturas = StreamController<Captura>.broadcast();
   Stream<Captura> get capturas => _capturas.stream;
 
-  bool _procesando = false;
   bool _observando = false;
   bool _encendida = false;
   bool _cerrada = false;
-  int _ronda = 0;
 
   String? error;
   bool permisoDenegado = false;
   bool linterna = false;
   /// Aumento actual (1 = sin zoom).
   double aumento = 1;
-  double _zoomMin = 1, _zoomMax = 1;
   int _cuadrosOscuros = 0;
 
   /// Se encendio la linterna sola por poca luz (para avisar una vez).
@@ -81,6 +106,10 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Medicion del ultimo cuadro (para el registro de fallos).
   InfoMotor? ultimaInfo;
+
+  /// Tamano del ultimo cuadro analizado (orientacion del sensor) y su giro.
+  Size _sensor = Size.zero;
+  int _giro = 90;
 
   /// Desde cuando hay un codigo a la vista (leido, retenido o ubicado por
   /// OpenCV) sin interrupcion, para medir cuanto tarda una lectura desde que
@@ -96,12 +125,15 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
 
   // Estadisticas para el registro (se vuelcan cada 2 s).
   final _reloj = Stopwatch();
-  int _recibidos = 0, _procesados = 0, _cuadrosConCodigo = 0;
-  int _msMotorTotal = 0, _msMotorMax = 0, _msIdaTotal = 0, _msIdaMax = 0, _leidosEnLapso = 0;
+  int _sensorInicio = -1, _analizadosInicio = 0, _ultimoSensor = 0, _ultimoAnalizado = 0;
+  int _procesados = 0, _cuadrosConCodigo = 0;
+  int _msMotorTotal = 0, _msMotorMax = 0, _edadTotal = 0, _edadMax = 0, _conEdad = 0, _leidosEnLapso = 0;
   int _usRapido = 0, _usDetector = 0, _usDificiles = 0, _conDificiles = 0;
+  int _expNs = 0, _iso = 0;
+  bool _expManual = false;
   bool _tamanoRegistrado = false;
 
-  bool get lista => _control?.value.isInitialized ?? false;
+  bool get lista => _datos != null;
   bool get encendida => _encendida;
 
   /// Encender y apagar van en fila: el permiso de camara (y salir y volver a
@@ -126,47 +158,38 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       _observando = true;
     }
     try {
-      final camaras = await availableCameras();
-      final trasera = camaras.firstWhere((c) => c.lensDirection == CameraLensDirection.back,
-          orElse: () => camaras.first);
-      final control = CameraController(
-        trasera,
-        multiple || ajustes.altaResolucion ? ResolutionPreset.veryHigh : ResolutionPreset.high,
-        enableAudio: false,
-        // 30 cuadros/s fijos: con poca luz la camara bajaba a 12-15 para
-        // alargar la exposicion, y eso borroneaba el movimiento (registro v0.9).
-        fps: 30,
-        imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
+      _suscripcion ??= CamaraNativa.cuadros().listen(_alCuadro, onError: (Object e) => registrar('ERROR', 'motor: $e'));
+      final d = await CamaraNativa.iniciar(
+        alta: multiple || ajustes.altaResolucion,
+        formatos: ajustes.grupo.mascaraMotor,
+        modo: _modo,
+        presupuestoUs: presupuestoUs,
+        exposicionPropia: ajustes.exposicionPropia,
       );
-      await control.initialize();
       if (_cerrada || !_encendida) {
-        await control.dispose();
+        await CamaraNativa.detener();
         return;
       }
-      _control = control;
-      try {
-        await control.setFocusMode(FocusMode.auto);
-      } catch (_) {}
-      _zoomMin = await control.getMinZoomLevel();
-      _zoomMax = math.min(await control.getMaxZoomLevel(), 8);
-      if (aumento != 1) await control.setZoomLevel(aumento.clamp(_zoomMin, _zoomMax));
-      if (linterna) await control.setFlashMode(FlashMode.torch);
-      _motor ??= await MotorLector.iniciar();
-      await control.startImageStream(_alCuadro);
+      _datos = d;
+      if (aumento != 1) await CamaraNativa.zoom(aumento.clamp(d.zoomMin, math.min(d.zoomMax, 8)));
+      if (linterna) await CamaraNativa.linterna(true);
       error = null;
       permisoDenegado = false;
       _tamanoRegistrado = false;
+      _sensorInicio = -1;
       _reloj
         ..reset()
         ..start();
-      registrar('CAMARA', 'encendida ${multiple ? "multiple" : "uno"} giro=${trasera.sensorOrientation} '
-          'vista=${_tam(control.value.previewSize)} zoom=${_zoomMin.toStringAsFixed(1)}-${_zoomMax.toStringAsFixed(1)} '
-          'formatos=${ajustes.grupo.name} nucleos=${Platform.numberOfProcessors}');
-    } on CameraException catch (e) {
-      permisoDenegado = e.code.contains('AccessDenied') || e.code.contains('Permission');
-      error = permisoDenegado ? null : '${e.code}: ${e.description ?? ''}';
+      registrar('CAMARA', 'encendida (nativa CameraX) ${multiple ? "multiple" : "uno"} giro=${d.giroSensor} '
+          'vista=${d.previaAncho}x${d.previaAlto} giro_vista=${d.giroListo ? "listo" : d.giroVista} '
+          'zoom=${d.zoomMin.toStringAsFixed(1)}-${d.zoomMax.toStringAsFixed(1)} '
+          'exposicion=${!ajustes.exposicionPropia ? "automatica (ajuste)" : d.exposicionManual ? "propia 1/250s" : "automatica (la camara no permite manual)"} '
+          'formatos=${ajustes.grupo.name} nucleos=${d.nucleos}');
+    } on PlatformException catch (e) {
+      permisoDenegado = e.code == 'permiso';
+      error = permisoDenegado ? null : '${e.code}: ${e.message ?? ''}';
       _encendida = false;
-      registrar('ERROR', 'camara ${e.code}: ${e.description}');
+      registrar('ERROR', 'camara ${e.code}: ${e.message}');
     } catch (e) {
       error = '$e';
       _encendida = false;
@@ -183,15 +206,14 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       _volcarEstadisticas();
       registrar('CAMARA', 'apagada');
     }
+    final habia = _encendida || _datos != null;
     _encendida = false;
-    final control = _control;
-    _control = null;
+    _datos = null;
     notifyListeners();
-    if (control != null) {
+    if (habia) {
       try {
-        if (control.value.isStreamingImages) await control.stopImageStream();
+        await CamaraNativa.detener();
       } catch (_) {}
-      await control.dispose();
     }
   }
 
@@ -203,40 +225,53 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  static String _tam(Size? s) => s == null ? '?' : '${s.width.toInt()}x${s.height.toInt()}';
-
   Future<void> cambiarLinterna([bool? encender]) async {
     linterna = encender ?? !linterna;
     linternaAutomatica = false;
     registrar('CAMARA', 'linterna ${linterna ? "encendida" : "apagada"}');
     notifyListeners();
+    if (_datos == null) return;
     try {
-      await _control?.setFlashMode(linterna ? FlashMode.torch : FlashMode.off);
+      await CamaraNativa.linterna(linterna);
     } catch (_) {}
   }
 
   Future<void> fijarAumento(double x) async {
-    aumento = x.clamp(_zoomMin, math.max(_zoomMin, _zoomMax));
+    final d = _datos;
+    aumento = d == null ? x : x.clamp(d.zoomMin, math.max(d.zoomMin, math.min(d.zoomMax, 8)));
     notifyListeners();
+    if (d == null) return;
     try {
-      await _control?.setZoomLevel(aumento);
+      await CamaraNativa.zoom(aumento);
     } catch (_) {}
   }
 
   /// Vuelve al enfoque automatico continuo (cancela un enfoque trabado en un
   /// punto). Para cuando la imagen sigue borrosa mucho rato.
   Future<void> reiniciarEnfoque() async {
+    if (_datos == null) return;
     try {
-      await _control?.setFocusMode(FocusMode.auto);
+      await CamaraNativa.reenfocar();
     } catch (_) {}
   }
 
-  /// [punto] normalizado (0..1) sobre la vista previa.
-  Future<void> enfocar(Offset punto) async {
+  /// Enfoca en [punto] de la vista ([vista] es su tamano; la imagen se
+  /// muestra con `cover`).
+  Future<void> enfocar(Offset punto, Size vista) async {
+    if (_datos == null || _sensor.isEmpty) return;
+    final p = desdeVista(punto, vista);
     try {
-      await _control?.setFocusPoint(punto);
-      await _control?.setExposurePoint(punto);
+      await CamaraNativa.enfocar(p.dx / _sensor.width, p.dy / _sensor.height);
     } catch (_) {}
+  }
+
+  /// Lleva un punto de la vista a pixeles del cuadro del sensor.
+  Offset desdeVista(Offset punto, Size vista) {
+    final vertical = tamVertical(_sensor, _giro);
+    final escala = math.max(vista.width / vertical.width, vista.height / vertical.height);
+    final v = Offset((punto.dx + (vertical.width * escala - vista.width) / 2) / escala,
+        (punto.dy + (vertical.height * escala - vista.height) / 2) / escala);
+    return desdeVertical(v, _sensor, _giro);
   }
 
   // ------------------------------------------------------------ cuadros
@@ -247,67 +282,48 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> congelar() async {
     congelada = true;
     try {
-      await _control?.pausePreview();
+      await CamaraNativa.pausar(true);
     } catch (_) {}
   }
 
   Future<void> descongelar() async {
     try {
-      await _control?.resumePreview();
+      await CamaraNativa.pausar(false);
     } catch (_) {}
     congelada = false;
   }
 
-  void _alCuadro(CameraImage img) {
-    _recibidos++;
-    if (_procesando || !_encendida || congelada) return;
-    _procesando = true;
-    _procesar(img).catchError((Object e) => debugPrint('Lector: $e')).whenComplete(() => _procesando = false);
-  }
-
-  Future<void> _procesar(CameraImage img) async {
-    final control = _control;
-    if (control == null) return;
-    final giro = control.description.sensorOrientation;
-    final plano = img.planes.first;
-    final sensor = Size(img.width.toDouble(), img.height.toDouble());
-    final grupo = ajustes.grupo;
-
-    final t0 = DateTime.now();
-    ResultadoMotor? r;
-    try {
-      r = await _motor?.leer(
-        plano.bytes,
-        ancho: img.width,
-        alto: img.height,
-        bytesPorFila: plano.bytesPerRow,
-        formatoPixel: Platform.isAndroid ? FormatoPixel.luma : FormatoPixel.bgra,
-        formatos: grupo.mascaraMotor,
-        modo: (multiple ? ModoMotor.todos | ModoMotor.cuadroCompleto : 0) |
-            (buscarTodos ? ModoMotor.todos : 0) |
-            (esfuerzo ? ModoMotor.intercalar : ModoMotor.soloRapido),
-        presupuestoUs: presupuestoUs,
-        ronda: _ronda,
-      );
-    } catch (e) {
-      registrar('ERROR', 'motor: $e');
-    }
-    final msIda = DateTime.now().difference(t0).inMilliseconds;
-    if (r == null) return;
-    _ronda = r.info.siguienteRonda;
+  void _alCuadro(CuadroNativo cuadro) {
+    if (!_encendida || congelada) return;
+    final r = cuadro.resultado;
+    final giro = cuadro.giro;
+    final sensor = Size(cuadro.ancho.toDouble(), cuadro.alto.toDouble());
+    _sensor = sensor;
+    _giro = giro;
     ultimaInfo = r.info;
+    _expNs = cuadro.exposicionNs;
+    _iso = cuadro.iso;
+    _expManual = cuadro.exposicionManual;
+    if (_sensorInicio < 0) {
+      _sensorInicio = cuadro.sensor;
+      _analizadosInicio = cuadro.analizados - 1;
+    }
+    _ultimoSensor = cuadro.sensor;
+    _ultimoAnalizado = cuadro.analizados;
     if (!_tamanoRegistrado) {
       _tamanoRegistrado = true;
-      registrar('CAMARA', 'cuadro ${img.width}x${img.height} fila=${plano.bytesPerRow} '
-          'planos=${img.planes.length} bytes=${plano.bytes.length} hilos_motor=${r.info.hilos} '
-          'opencv=${_conOpenCV() ? "si" : "no"}');
+      registrar('CAMARA', 'cuadro ${cuadro.ancho}x${cuadro.alto} fila=${cuadro.fila} giro=$giro '
+          'hilos_motor=${r.info.hilos} opencv=${_conOpenCV() ? "si" : "no"}');
     }
     _procesados++;
     final msMotor = r.info.microsegundos ~/ 1000;
     _msMotorTotal += msMotor;
     if (msMotor > _msMotorMax) _msMotorMax = msMotor;
-    _msIdaTotal += msIda;
-    if (msIda > _msIdaMax) _msIdaMax = msIda;
+    if (cuadro.edadMs >= 0) {
+      _edadTotal += cuadro.edadMs;
+      _conEdad++;
+      if (cuadro.edadMs > _edadMax) _edadMax = cuadro.edadMs;
+    }
     if (r.codigos.isNotEmpty) _cuadrosConCodigo++;
     final tp = r.info.tiempoPorPaso;
     _usRapido += tp[PasoMotor.rapido] ?? 0;
@@ -319,7 +335,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       _usDificiles += dificiles;
       _conDificiles++;
     }
-    _leidosEnLapso += r.codigos.length;
+    _leidosEnLapso += r.codigos.where((c) => !c.sinLeer).length;
     if (_reloj.elapsedMilliseconds >= 2000) _volcarEstadisticas();
 
     final sinLeer = [
@@ -351,7 +367,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     for (final d in _fusion.retenidos) {
       registrar('DUDOSO', '${d.valor} ${d.formato} paso=${d.detalle} (se cuenta si se repite en el cuadro siguiente)');
     }
-    if (!_capturas.isClosed && _encendida) {
+    if (!_capturas.isClosed) {
       _capturas.add(Captura(tamVertical(sensor, giro), confirmados,
           info: r.info, ilegible: r.info.ilegibles > 0, sinLeer: sinLeer));
     }
@@ -361,17 +377,22 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     final seg = _reloj.elapsedMilliseconds / 1000;
     if (_procesados > 0 && seg > 0) {
       final i = ultimaInfo;
-      registrar('CUADROS', 'en ${seg.toStringAsFixed(1)}s: recibidos=$_recibidos procesados=$_procesados '
-          '(${(_procesados / seg).toStringAsFixed(1)}/s) con_codigo=$_cuadrosConCodigo '
+      final sensor = _sensorInicio < 0 ? 0 : _ultimoSensor - _sensorInicio;
+      final analizados = _ultimoAnalizado - _analizadosInicio;
+      registrar('CUADROS', 'en ${seg.toStringAsFixed(1)}s: sensor=$sensor (${(sensor / seg).toStringAsFixed(1)}/s) '
+          'analizados=$analizados (${(analizados / seg).toStringAsFixed(1)}/s) con_codigo=$_cuadrosConCodigo '
           'codigos_leidos=$_leidosEnLapso motor prom=${_msMotorTotal ~/ _procesados}ms max=${_msMotorMax}ms '
-          'ida_y_vuelta prom=${_msIdaTotal ~/ _procesados}ms max=${_msIdaMax}ms '
+          'retraso_cuadro prom=${_conEdad == 0 ? '?' : _edadTotal ~/ _conEdad}ms max=${_edadMax}ms '
           '[rapido=${_usRapido ~/ _procesados ~/ 1000}ms opencv=${_usDetector ~/ _procesados ~/ 1000}ms '
           'dificiles=${_conDificiles == 0 ? 0 : _usDificiles ~/ _conDificiles ~/ 1000}ms en $_conDificiles cuadros]'
           '${i == null ? '' : ' brillo=${i.brillo} contraste=${i.contraste} nitidez=${i.nitidez} reflejo=${i.quemados}%'} '
+          'exposicion=${(_expNs / 1e6).toStringAsFixed(1)}ms iso=$_iso ${_expManual ? "propia" : "auto"} '
           'linterna=${linterna ? "si" : "no"} zoom=${aumento.toStringAsFixed(1)}');
     }
-    _recibidos = _procesados = _cuadrosConCodigo = 0;
-    _msMotorTotal = _msMotorMax = _msIdaTotal = _msIdaMax = _leidosEnLapso = 0;
+    _sensorInicio = _ultimoSensor;
+    _analizadosInicio = _ultimoAnalizado;
+    _procesados = _cuadrosConCodigo = 0;
+    _msMotorTotal = _msMotorMax = _edadTotal = _edadMax = _conEdad = _leidosEnLapso = 0;
     _usRapido = _usDetector = _usDificiles = _conDificiles = 0;
     _reloj
       ..reset()
@@ -415,7 +436,8 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   void dispose() {
     _cerrada = true;
     WidgetsBinding.instance.removeObserver(this);
-    unawaited(apagar().whenComplete(() => _motor?.cerrar()));
+    unawaited(apagar());
+    unawaited(_suscripcion?.cancel());
     unawaited(_capturas.close());
     super.dispose();
   }
@@ -434,30 +456,28 @@ class VistaCamara extends StatelessWidget {
     return ListenableBuilder(
       listenable: camara,
       builder: (context, _) {
-        final control = camara.control;
+        final d = camara.datos;
         if (camara.permisoDenegado) {
           return const _Aviso('Sin permiso de camara. Activalo en Ajustes del telefono > Apps > DIFAR Logistica.');
         }
         if (camara.error != null) return _Aviso('No se pudo abrir la camara (${camara.error}).');
-        if (control == null || !control.value.isInitialized) return const ColoredBox(color: Colors.black);
-        final previa = control.value.previewSize!;
+        if (d == null) return const ColoredBox(color: Colors.black);
+        final w = d.previaAncho.toDouble(), h = d.previaAlto.toDouble();
+        final textura = Texture(key: ValueKey(d.textura), textureId: d.textura);
+        // La textura llega en la orientacion del sensor (salvo que ya venga
+        // girada); la app esta fija en vertical.
+        final Widget previa = d.giroListo
+            ? SizedBox(width: h, height: w, child: textura)
+            : RotatedBox(quarterTurns: d.giroVista ~/ 90, child: SizedBox(width: w, height: h, child: textura));
         return LayoutBuilder(
           builder: (context, c) => GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTapUp: (d) {
+            onTapUp: (t) {
               alTocar?.call();
-              camara.enfocar(Offset(d.localPosition.dx / c.maxWidth, d.localPosition.dy / c.maxHeight));
+              camara.enfocar(t.localPosition, c.biggest);
             },
             child: ClipRect(
-              child: FittedBox(
-                fit: BoxFit.cover,
-                child: SizedBox(
-                  // previewSize viene en horizontal; la app esta en vertical.
-                  width: previa.height,
-                  height: previa.width,
-                  child: CameraPreview(control),
-                ),
-              ),
+              child: FittedBox(fit: BoxFit.cover, child: previa),
             ),
           ),
         );

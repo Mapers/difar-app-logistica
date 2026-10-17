@@ -53,6 +53,8 @@ set_target_properties(motor_lector PROPERTIES
 target_compile_definitions(motor_lector PUBLIC DART_SHARED_LIB)
 
 if (ANDROID)
+  # Camara nativa: el analizador de CameraX llama al motor por JNI.
+  target_sources(motor_lector PRIVATE "jni_camara.cpp")
   # Android 15: paginas de 16 KB.
   target_link_options(motor_lector PRIVATE "-Wl,-z,max-page-size=16384")
   # Biblioteca estandar de C++ dentro del .so (no hay otra en la app).

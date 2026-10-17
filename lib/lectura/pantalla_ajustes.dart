@@ -60,6 +60,12 @@ class PantallaAjustes extends StatelessWidget {
               onChanged: (v) => ajustes.altaResolucion = v,
             ),
             SwitchListTile(
+              title: const Text('Exposicion rapida (anti movimiento)'),
+              subtitle: const Text('Disparo corto (1/250 s) con sensibilidad automatica: las barras no se borronean al mover el telefono.'),
+              value: ajustes.exposicionPropia,
+              onChanged: (v) => ajustes.exposicionPropia = v,
+            ),
+            SwitchListTile(
               title: const Text('Linterna automatica'),
               subtitle: const Text('Se enciende sola cuando hay poca luz.'),
               value: ajustes.linternaAuto,
