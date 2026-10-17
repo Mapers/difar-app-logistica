@@ -32,6 +32,14 @@ android {
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
+    // Solo arm64-v8a: los plugins igual compilan otras arquitecturas, que no
+    // sirven (la app no corre sin libflutter.so de esa arquitectura).
+    packaging {
+        jniLibs {
+            excludes += listOf("lib/armeabi-v7a/**", "lib/x86/**", "lib/x86_64/**")
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.
