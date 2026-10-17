@@ -51,9 +51,13 @@ class _PantallaMultiState extends State<PantallaMulti> {
     if (_auto) _contarVisibles();
   }
 
-  void _contarVisibles() {
+  void _contarVisibles({bool manual = false}) {
     final cuadro = _cuadro.value;
-    if (cuadro == null) return;
+    if (cuadro == null || cuadro.vistos.isEmpty) {
+      // Disparador sin ningun codigo a la vista: aviso de error.
+      if (manual) _sinCodigos();
+      return;
+    }
     final ahora = DateTime.now();
     var nuevos = 0;
     for (final v in cuadro.vistos) {
@@ -71,6 +75,18 @@ class _PantallaMultiState extends State<PantallaMulti> {
     _ocultarLote = Timer(const Duration(milliseconds: 1200), () {
       if (mounted) setState(() => _ultimoLote = null);
     });
+  }
+
+  void _sinCodigos() {
+    unawaited(AvisoLectura.fallo(sonido: widget.ajustes.sonido, vibrar: widget.ajustes.vibrar));
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: const Text('No se ve ningun codigo. Acercate o apunta mejor.'),
+        backgroundColor: Theme.of(context).colorScheme.error,
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ));
   }
 
   @override
@@ -172,7 +188,7 @@ class _PantallaMultiState extends State<PantallaMulti> {
             button: true,
             label: 'Contar todos los codigos a la vista',
             child: GestureDetector(
-              onTap: _contarVisibles,
+              onTap: () => _contarVisibles(manual: true),
               child: Container(
                 width: 78,
                 height: 78,

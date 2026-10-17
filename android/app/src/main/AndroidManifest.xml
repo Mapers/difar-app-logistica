@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Vibracion al leer y al fallar (canal difar/pitido en MainActivity). -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <application
         android:label="DIFAR Logistica"
         android:name="${applicationName}"

@@ -35,7 +35,7 @@ class PantallaPrincipal extends StatefulWidget {
 
 class _PantallaPrincipalState extends State<PantallaPrincipal> {
   static const _apagarTras = Duration(seconds: 30);
-  static const _esperaToque = Duration(seconds: 4);
+  static const _esperaToque = Duration(seconds: 3);
   static const _paraMantener = Duration(milliseconds: 300);
 
   late MobileScannerController _camara = crearCamara(_ajustes);
@@ -49,11 +49,17 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
   bool _ocupada = false; // otra pantalla usa la camara
   String? _resaltado;
 
+  /// Si el disparo actual (toque o mantener) ya leyo algo. Si termina sin
+  /// leer nada, suena el aviso de error.
+  bool _leyoEnDisparo = false;
+  bool _error = false;
+
   Timer? _finToque;
   Timer? _detectarMantener;
   Timer? _apagar;
   Timer? _limpiarMarcas;
   Timer? _quitarResaltado;
+  Timer? _quitarError;
 
   Size _tamVista = Size.zero;
   final _cuadro = ValueNotifier<_Cuadro?>(null);
@@ -70,7 +76,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
 
   @override
   void dispose() {
-    for (final t in [_finToque, _detectarMantener, _apagar, _limpiarMarcas, _quitarResaltado]) {
+    for (final t in [_finToque, _detectarMantener, _apagar, _limpiarMarcas, _quitarResaltado, _quitarError]) {
       t?.cancel();
     }
     _cuadro.dispose();
@@ -88,7 +94,9 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
     setState(() {
       _armado = true;
       _sostenido = false;
+      _error = false;
     });
+    _leyoEnDisparo = false;
     _finToque?.cancel();
     _detectarMantener?.cancel();
     _detectarMantener = Timer(_paraMantener, () {
@@ -100,11 +108,34 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
     _dedoAbajo = false;
     _detectarMantener?.cancel();
     if (_sostenido) {
+      if (!_leyoEnDisparo) _noSeLeyo('No se leyo ningun codigo');
       _desarmar();
     } else if (_armado) {
       // Toque corto: queda esperando un codigo unos segundos.
-      _finToque = Timer(_esperaToque, _desarmar);
+      _finToque = Timer(_esperaToque, () {
+        if (!_leyoEnDisparo) _noSeLeyo('No se leyo ningun codigo');
+        _desarmar();
+      });
     }
+  }
+
+  /// Aviso de error: tono grave doble, doble vibracion, borde rojo y mensaje.
+  void _noSeLeyo(String motivo) {
+    if (!mounted) return;
+    unawaited(AvisoLectura.fallo(sonido: _ajustes.sonido, vibrar: _ajustes.vibrar));
+    setState(() => _error = true);
+    _quitarError?.cancel();
+    _quitarError = Timer(const Duration(milliseconds: 1200), () {
+      if (mounted) setState(() => _error = false);
+    });
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text('$motivo. Acerca la camara, limpia la etiqueta o ingresalo a mano.'),
+        backgroundColor: Theme.of(context).colorScheme.error,
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ));
   }
 
   void _desarmar() {
@@ -149,11 +180,21 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
           sumarRepetidos: _ajustes.sumarRepetidos,
           // Cada toque es intencional: cuenta aunque sea el mismo de recien.
           forzar: !_sostenido);
-      if (leido == ResultadoLectura.ignorado) {
-        leido = null;
-      } else {
+      if (leido != ResultadoLectura.ignorado) {
         _alLeer(v.valor, leido);
+      } else {
+        leido = null;
+        if (!_sostenido) {
+          // Toque sobre un codigo que ya esta y "Sumar repetidos" apagado: se
+          // leyo bien, solo no se suma. Aviso suave, no de error.
+          _alLeer(v.valor, ResultadoLectura.sumado);
+        }
       }
+    } else if (_armado && !_leyoEnDisparo && apuntado == null && _hayIlegible(captura)) {
+      // La camara ve un codigo pero no puede decodificar su contenido.
+      _leyoEnDisparo = true; // un solo aviso por disparo
+      _noSeLeyo('Codigo ilegible');
+      if (!_sostenido) _desarmar();
     }
 
     _cuadro.value = _Cuadro(captura.size, vistos, apuntado, leido);
@@ -161,7 +202,11 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
     _limpiarMarcas = Timer(const Duration(milliseconds: 350), () => _cuadro.value = null);
   }
 
+  bool _hayIlegible(BarcodeCapture captura) =>
+      captura.barcodes.any((b) => b.rawValue == null || b.rawValue!.isEmpty);
+
   void _alLeer(String valor, ResultadoLectura r) {
+    _leyoEnDisparo = true;
     unawaited(AvisoLectura.leido(
       sonido: _ajustes.sonido,
       vibrar: _ajustes.vibrar,
@@ -280,7 +325,10 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
     return Material(
       elevation: 8,
       color: Colors.black,
-      borderRadius: BorderRadius.circular(16),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: _error ? const BorderSide(color: Colors.redAccent, width: 4) : BorderSide.none,
+      ),
       clipBehavior: Clip.antiAlias,
       child: LayoutBuilder(builder: (context, c) {
         _tamVista = c.biggest;

@@ -12,11 +12,24 @@ import UIKit
     if let registrar = self.registrar(forPlugin: "Pitido") {
       FlutterMethodChannel(name: "difar/pitido", binaryMessenger: registrar.messenger())
         .setMethodCallHandler { call, result in
-          if call.method == "pitido" {
+          switch call.method {
+          case "pitido":
             // 1057 = "Tink", corto y sin demora.
             AudioServicesPlaySystemSound(1057)
             result(nil)
-          } else {
+          case "error":
+            // 1073 = tono de error del sistema, distinto al de exito.
+            AudioServicesPlaySystemSound(1073)
+            result(nil)
+          case "vibrar":
+            let args = call.arguments as? [String: Any]
+            if (args?["tipo"] as? String) == "error" {
+              AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+            } else {
+              UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+            }
+            result(nil)
+          default:
             result(FlutterMethodNotImplemented)
           }
         }

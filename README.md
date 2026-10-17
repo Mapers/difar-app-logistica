@@ -15,6 +15,12 @@ Android, Apple Vision en iOS). Gratis y sin licencia por dispositivo.
   - **mantener presionado** = lee seguido mientras se mantiene.
 - **Pitido + vibracion** en cada lectura (pitido nativo, sin demora; si el
   volumen multimedia esta en 0 suena por el de notificaciones).
+- **Si no se pudo leer**, suena un **tono grave doble** (distinto al pitido)
+  con **doble vibracion larga**, borde rojo en la camara y un mensaje:
+  - tocaste el boton y en 3 s no leyo nada (codigo danado, borroso, lejos o
+    de un formato que no esta activado en Ajustes);
+  - mantuviste presionado y soltaste sin leer nada;
+  - la camara ve un codigo pero no puede decodificar su contenido.
 - Con varios codigos a la vista lee **solo el apuntado** (el mas cercano al
   centro, recuadro blanco -> verde al leer); los demas salen "No escaneado".
 - La fila leida se resalta arriba de la lista; sumar/restar/editar cantidad,
@@ -28,6 +34,7 @@ Android, Apple Vision en iOS). Gratis y sin licencia por dispositivo.
 - El **disparador cuenta todos los codigos a la vista de una vez** (pallet,
   estanteria, caja con varias etiquetas): pasan a verde con check y no se
   vuelven a contar. Un pitido por lote y "+N" en pantalla.
+- Disparador sin ningun codigo a la vista = sonido y vibracion de error.
 - Barra de progreso contados/a la vista, total del conteo y "Auto" para
   contar sin tocar el disparador. Usa 1920x1080 para codigos chicos.
 
