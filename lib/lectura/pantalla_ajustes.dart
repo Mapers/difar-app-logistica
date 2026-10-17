@@ -67,6 +67,12 @@ class PantallaAjustes extends StatelessWidget {
             ),
             const _Titulo('Camara y avisos'),
             SwitchListTile(
+              title: const Text('Alta resolucion (1080p)'),
+              subtitle: const Text('Lee codigos chicos o lejanos al primer intento. Apagado (720p) procesa mas cuadros por segundo.'),
+              value: ajustes.altaResolucion,
+              onChanged: (v) => ajustes.altaResolucion = v,
+            ),
+            SwitchListTile(
               title: const Text('Linterna automatica'),
               subtitle: const Text('Se enciende sola cuando hay poca luz.'),
               value: ajustes.linternaAuto,

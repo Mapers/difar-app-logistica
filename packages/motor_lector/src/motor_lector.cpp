@@ -142,6 +142,7 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     info->brillo = est.brillo;
     info->contraste = est.contraste;
     info->quemados = est.quemados;
+    info->nitidez = est.nitidez;
     info->sugerir_linterna = est.brillo < 60 ? 1 : 0;
 
     Lector lector{aFormatosZx(formatos), multiple != 0, {}};

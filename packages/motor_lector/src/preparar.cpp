@@ -11,21 +11,22 @@ inline uint8_t recortar(int v) { return (uint8_t)std::clamp(v, 0, 255); }
 
 Estadistica medir(const uint8_t* px, int ancho, int alto, int fila) {
   const int x0 = ancho / 4, x1 = ancho * 3 / 4, y0 = alto / 4, y1 = alto * 3 / 4;
-  int64_t suma = 0, suma2 = 0, n = 0, quemados = 0;
-  for (int y = y0; y < y1; y += 4) {
+  int64_t suma = 0, suma2 = 0, n = 0, quemados = 0, bordes = 0;
+  for (int y = std::max(y0, 1); y < std::min(y1, alto - 1); y += 4) {
     const uint8_t* f = px + (size_t)y * fila;
-    for (int x = x0; x < x1; x += 4) {
+    for (int x = std::max(x0, 1); x < std::min(x1, ancho - 1); x += 4) {
       const int v = f[x];
       suma += v;
       suma2 += v * v;
       quemados += v >= 250;
+      bordes += std::abs(4 * v - f[x - 1] - f[x + 1] - f[x - fila] - f[x + fila]);
       n++;
     }
   }
-  if (n == 0) return {0, 0, 0};
+  if (n == 0) return {0, 0, 0, 0};
   const double media = (double)suma / n;
   const double var = std::max(0.0, (double)suma2 / n - media * media);
-  return {(int)media, (int)std::sqrt(var), (int)(quemados * 100 / n)};
+  return {(int)media, (int)std::sqrt(var), (int)(quemados * 100 / n), (int)(bordes / n)};
 }
 
 Gris deBgra(const uint8_t* bgra, int ancho, int alto, int fila) {

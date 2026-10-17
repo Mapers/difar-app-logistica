@@ -158,7 +158,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
     final i = _camara.ultimaInfo;
     registrar('FALLO', '$motivo tras ${_desdeToque.elapsedMilliseconds}ms '
         '(${_sostenido ? "mantener" : "toque"})'
-        '${i == null ? '' : ' brillo=${i.brillo} contraste=${i.contraste} reflejo=${i.quemados}% pasos=${i.pasos}'}'
+        '${i == null ? '' : ' brillo=${i.brillo} contraste=${i.contraste} nitidez=${i.nitidez} reflejo=${i.quemados}% pasos=${i.pasos}'}'
         ' linterna=${_camara.linterna ? "si" : "no"}');
     unawaited(AvisoLectura.fallo(sonido: _ajustes.sonido, vibrar: _ajustes.vibrar));
     setState(() => _error = true);
@@ -254,7 +254,9 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
         '${(v?.detalle.isNotEmpty ?? false) ? " paso=${v!.detalle}" : ""} '
         '${r == ResultadoLectura.nuevo ? "nuevo" : "sumado"} en ${_desdeToque.elapsedMilliseconds}ms '
         '(${_sostenido ? "mantener" : "toque"}) a_la_vista=${captura?.codigos.length ?? 1}'
-        '${i == null ? '' : ' brillo=${i.brillo} reflejo=${i.quemados}% C++=${i.microsegundos ~/ 1000}ms'}');
+        '${v == null ? '' : ' ${tamanoCodigo(v)}'}'
+        '${captura == null ? '' : ' imagen=${captura.imagen.width.toInt()}x${captura.imagen.height.toInt()}'}'
+        '${i == null ? '' : ' brillo=${i.brillo} nitidez=${i.nitidez} reflejo=${i.quemados}% C++=${i.microsegundos ~/ 1000}ms'}');
     _desdeToque
       ..reset()
       ..start();

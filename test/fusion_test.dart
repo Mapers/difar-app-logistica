@@ -44,4 +44,10 @@ void main() {
     expect(aVertical(const Offset(1280, 720), sensor, 90), const Offset(0, 1280));
     expect(aVertical(const Offset(10, 20), sensor, 270), const Offset(20, 1270));
   });
+
+  test('tamano del codigo para el registro', () {
+    final c = CodigoVisto('7750182000123', 'EAN-13', const [Offset(0, 0), Offset(190, 0), Offset(190, 60), Offset(0, 60)],
+        simbologia: Simbologia.ean13);
+    expect(tamanoCodigo(c), 'largo=190px (2.0 px/barra)');
+  });
 }

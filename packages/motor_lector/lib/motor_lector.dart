@@ -87,6 +87,7 @@ class InfoMotor {
     this.siguienteRonda = 0,
     this.microsegundos = 0,
     this.tiempoPorPaso = const {},
+    this.nitidez = 0,
   });
 
   /// 0..255, promedio del centro del cuadro.
@@ -102,6 +103,9 @@ class InfoMotor {
   final int siguienteRonda;
   final int microsegundos;
   final Map<PasoMotor, int> tiempoPorPaso;
+
+  /// Promedio del |laplaciano| del centro: bajo = desenfocado o movido.
+  final int nitidez;
 }
 
 class ResultadoMotor {
@@ -150,6 +154,8 @@ final class _MlInfo extends Struct {
   external int microsegundos;
   @Array(_pasos)
   external Array<Int32> tiempoPasoUs;
+  @Int32()
+  external int nitidez;
 }
 
 typedef _LeerC = Int32 Function(Pointer<Uint8>, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32,
@@ -249,6 +255,7 @@ ResultadoMotor leerCuadro(
       pasos: i.pasos,
       siguienteRonda: i.siguienteRonda,
       microsegundos: i.microsegundos,
+      nitidez: i.nitidez,
       tiempoPorPaso: {
         for (var p = 1; p < _pasos && p < PasoMotor.values.length; p++)
           if (i.tiempoPasoUs[p] > 0) PasoMotor.values[p]: i.tiempoPasoUs[p],

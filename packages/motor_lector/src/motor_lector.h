@@ -68,6 +68,7 @@ typedef struct {
   int32_t siguiente_ronda; // valor de [ronda] para el proximo cuadro
   int32_t microsegundos;   // tiempo total
   int32_t tiempo_paso_us[ML_PASOS]; // tiempo de cada paso (indice = ML_PASO_*), 0 si no se hizo
+  int32_t nitidez;         // promedio del |laplaciano| del centro: bajo = desenfocado o movido
 } ml_info;
 
 // Lee los codigos de un cuadro. Devuelve cuantos escribio en [salida].

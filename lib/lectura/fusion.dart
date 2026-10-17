@@ -19,6 +19,25 @@ class CodigoVisto {
   final String detalle;
 }
 
+/// Para el registro: largo del codigo en pixeles de la camara y, si se sabe
+/// cuantos modulos tiene (EAN/UPC), pixeles por barra fina. Con menos de ~2
+/// px por barra la lectura se vuelve dificil.
+String tamanoCodigo(CodigoVisto c) {
+  if (c.esquinas.length < 4) return '';
+  var largo = 0.0;
+  for (var i = 0; i < 4; i++) {
+    final d = (c.esquinas[i] - c.esquinas[(i + 1) % 4]).distance;
+    if (d > largo) largo = d;
+  }
+  final modulos = switch (c.simbologia) {
+    Simbologia.ean13 || Simbologia.upcA => 95,
+    Simbologia.ean8 => 67,
+    Simbologia.upcE => 51,
+    _ => 0,
+  };
+  return 'largo=${largo.round()}px${modulos > 0 ? ' (${(largo / modulos).toStringAsFixed(1)} px/barra)' : ''}';
+}
+
 /// Tamano de la imagen del sensor ya girada a vertical.
 Size tamVertical(Size sensor, int giro) => giro % 180 == 0 ? sensor : Size(sensor.height, sensor.width);
 

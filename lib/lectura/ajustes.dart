@@ -48,6 +48,11 @@ class Ajustes extends ChangeNotifier {
       );
   set motor(MotorLectura v) => _set(() => _prefs?.setString('motor', v.name));
 
+  /// 1080p: los codigos chicos o lejanos se leen al primer intento; 720p
+  /// procesa mas cuadros por segundo. Para comparar en el telefono.
+  bool get altaResolucion => _prefs?.getBool('alta_resolucion') ?? true;
+  set altaResolucion(bool v) => _set(() => _prefs?.setBool('alta_resolucion', v));
+
   /// Enciende la linterna sola cuando hay poca luz.
   bool get linternaAuto => _prefs?.getBool('linterna_auto') ?? true;
   set linternaAuto(bool v) => _set(() => _prefs?.setBool('linterna_auto', v));

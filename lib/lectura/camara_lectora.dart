@@ -83,7 +83,20 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   bool get lista => _control?.value.isInitialized ?? false;
   bool get encendida => _encendida;
 
-  Future<void> iniciar() async {
+  /// Encender y apagar van en fila: el permiso de camara (y salir y volver a
+  /// la app) pide apagar mientras todavia se esta encendiendo, y sin fila
+  /// quedaban dos camaras abiertas.
+  Future<void> _cola = Future.value();
+
+  Future<void> _enFila(Future<void> Function() accion) {
+    final siguiente = _cola.then((_) => accion());
+    _cola = siguiente.catchError((Object _) {});
+    return siguiente;
+  }
+
+  Future<void> iniciar() => _enFila(_iniciar);
+
+  Future<void> _iniciar() async {
     if (_cerrada || _encendida) return;
     _encendida = true;
     if (!_observando) {
@@ -97,7 +110,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
           orElse: () => camaras.first);
       final control = CameraController(
         trasera,
-        multiple ? ResolutionPreset.veryHigh : ResolutionPreset.high,
+        multiple || ajustes.altaResolucion ? ResolutionPreset.veryHigh : ResolutionPreset.high,
         enableAudio: false,
         imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
       );
@@ -123,7 +136,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
         ..reset()
         ..start();
       registrar('CAMARA', 'encendida ${multiple ? "multiple" : "uno"} giro=${trasera.sensorOrientation} '
-          'vista=${control.value.previewSize} zoom=${_zoomMin.toStringAsFixed(1)}-${_zoomMax.toStringAsFixed(1)} '
+          'vista=${_tam(control.value.previewSize)} zoom=${_zoomMin.toStringAsFixed(1)}-${_zoomMax.toStringAsFixed(1)} '
           'motor=${ajustes.motor.name} formatos=${ajustes.grupo.name}');
     } on CameraException catch (e) {
       permisoDenegado = e.code.contains('AccessDenied') || e.code.contains('Permission');
@@ -149,7 +162,9 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// Apaga la camara (libera el sensor para otra pantalla o ahorra bateria).
-  Future<void> apagar() async {
+  Future<void> apagar() => _enFila(_apagar);
+
+  Future<void> _apagar() async {
     if (_encendida) {
       _volcarEstadisticas();
       registrar('CAMARA', 'apagada');
@@ -165,6 +180,8 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       await control.dispose();
     }
   }
+
+  static String _tam(Size? s) => s == null ? '?' : '${s.width.toInt()}x${s.height.toInt()}';
 
   Future<void> cambiarLinterna([bool? encender]) async {
     linterna = encender ?? !linterna;
@@ -312,7 +329,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
           '(${(_procesados / seg).toStringAsFixed(1)}/s) con_codigo=$_cuadrosConCodigo '
           'C++ prom=${_msCppTotal ~/ _procesados}ms max=${_msCppMax}ms '
           'MLKit prom=${_msMlTotal ~/ _procesados}ms max=${_msMlMax}ms'
-          '${i == null ? '' : ' brillo=${i.brillo} contraste=${i.contraste} reflejo=${i.quemados}%'} '
+          '${i == null ? '' : ' brillo=${i.brillo} contraste=${i.contraste} nitidez=${i.nitidez} reflejo=${i.quemados}%'} '
           'linterna=${linterna ? "si" : "no"} zoom=${aumento.toStringAsFixed(1)}');
     }
     _recibidos = _procesados = _cuadrosConCodigo = 0;
@@ -357,8 +374,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   void dispose() {
     _cerrada = true;
     WidgetsBinding.instance.removeObserver(this);
-    unawaited(apagar());
-    _motor?.cerrar();
+    unawaited(apagar().whenComplete(() => _motor?.cerrar()));
     unawaited(_mlkit?.close());
     unawaited(_capturas.close());
     super.dispose();

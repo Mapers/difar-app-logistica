@@ -59,6 +59,7 @@ void main() {
     expect(r.codigos.single.texto, 'DIFAR|PALLET|00042');
     expect(r.codigos.single.paso, PasoMotor.rapido);
     expect(r.info.brillo, inInclusiveRange(1, 255));
+    expect(r.info.nitidez, greaterThan(0));
   }, skip: saltar);
 
   test('pasos repartidos entre cuadros con tope de tiempo', () {

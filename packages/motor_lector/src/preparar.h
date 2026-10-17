@@ -19,6 +19,7 @@ struct Estadistica {
   int brillo;    // promedio 0..255
   int contraste; // desviacion estandar
   int quemados;  // % de pixeles >= 250
+  int nitidez;   // promedio del |laplaciano|: bajo = desenfocado o movido
 };
 
 // Mide la zona central (la mitad del cuadro), salteando pixeles para ser rapido.
