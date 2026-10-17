@@ -51,6 +51,9 @@ abstract final class ModoMotor {
 
   /// Cuadros impares solo el paso rapido: mas cuadros por segundo.
   static const intercalar = 8;
+
+  /// El telefono se mueve rapido (giroscopio): se aplazan los pasos dificiles.
+  static const moviendo = 16;
 }
 
 /// Paso del motor que logro la lectura (ML_PASO_*).
@@ -65,7 +68,9 @@ enum PasoMotor {
   rotado('rotado'),
   detector('detector'),
   detectorPreparado('detector+contraste'),
-  gris('tonos de gris');
+  gris('tonos de gris'),
+  red('red neuronal'),
+  restaurado('restaurado por red');
 
   const PasoMotor(this.nombre);
   final String nombre;
@@ -157,7 +162,7 @@ class ResultadoMotor {
 // ------------------------------------------------------------------ FFI
 
 const _maxSalida = 64;
-const _pasos = 11; // ML_PASOS
+const _pasos = 13; // ML_PASOS
 
 final class _MlCodigo extends Struct {
   @Int32()

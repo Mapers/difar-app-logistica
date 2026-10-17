@@ -64,6 +64,7 @@ class CuadroNativo {
         sensor = m['sensor'] as int,
         msMotor = m['msMotor'] as int,
         edadMs = m['edad'] as int,
+        velocidadGiro = (m['giroRad'] as num?)?.toDouble() ?? 0,
         exposicionNs = (m['exp'] as int?) ?? 0,
         iso = (m['iso'] as int?) ?? 0,
         modoExposicion = (m['modoExp'] as String?) ?? '?';
@@ -87,6 +88,9 @@ class CuadroNativo {
   /// Tiempo de la llamada al motor (en Java), y edad del cuadro al terminar
   /// (desde que lo tomo el sensor; -1 si no se sabe).
   final int msMotor, edadMs;
+
+  /// Velocidad de giro del telefono (rad/s, giroscopio).
+  final double velocidadGiro;
 
   /// Exposicion e ISO con que el sensor tomo los ultimos cuadros.
   final int exposicionNs, iso;

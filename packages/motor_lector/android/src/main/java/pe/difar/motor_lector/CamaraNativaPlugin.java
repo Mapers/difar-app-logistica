@@ -12,6 +12,10 @@ import android.hardware.camera2.TotalCaptureResult;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.util.Range;
 import android.util.Size;
 import android.view.Surface;
@@ -69,6 +73,7 @@ public class CamaraNativaPlugin
         EventChannel.StreamHandler,
         PluginRegistry.RequestPermissionsResultListener {
   private static final int PEDIDO_PERMISO = 0x4d4c;
+  private static final int MODO_MOVIENDO = 16; // ML_MODO_MOVIENDO
 
   private MethodChannel canal;
   private EventChannel canalResultados;
@@ -92,6 +97,24 @@ public class CamaraNativaPlugin
   private int ronda;
   private volatile boolean verificando;
   private int analizados;
+
+  // Giroscopio: velocidad de giro del telefono (rad/s, suavizada). Moviendo
+  // rapido, la imagen sale corrida: el motor no gasta los pasos dificiles.
+  // Con 4 ms de exposicion y ~1500 px de distancia focal, 1 rad/s corre la
+  // imagen unos 6 px (2 barras de un EAN a 3 px/barra).
+  static final float GIRO_MOVIENDO = 1.0f;
+  private volatile float giro;
+  private SensorManager sensores;
+  private final SensorEventListener oyenteGiro = new SensorEventListener() {
+    @Override
+    public void onSensorChanged(SensorEvent e) {
+      final float v = (float) Math.sqrt(e.values[0] * e.values[0] + e.values[1] * e.values[1] + e.values[2] * e.values[2]);
+      giro = giro * 0.6f + v * 0.4f;
+    }
+
+    @Override
+    public void onAccuracyChanged(Sensor s, int precision) {}
+  };
 
   // Lo que reporta la camara (hilo de la camara).
   private volatile int completados;
@@ -321,6 +344,9 @@ public class CamaraNativaPlugin
         (LifecycleOwner) actividad.getActivity(), CameraSelector.DEFAULT_BACK_CAMERA, previa, analisis);
     final ResolutionInfo ra = analisis.getResolutionInfo();
     final ResolutionInfo rp = previa.getResolutionInfo();
+    sensores = (SensorManager) contexto.getSystemService(Context.SENSOR_SERVICE);
+    final Sensor sensorGiro = sensores == null ? null : sensores.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
+    if (sensorGiro != null) sensores.registerListener(oyenteGiro, sensorGiro, SensorManager.SENSOR_DELAY_GAME);
     exposicion = new Exposicion(camara, ra == null ? null : ra.getResolution(), rp == null ? null : rp.getResolution(),
         exposicionPropia);
     aplicar(exposicion.inicial());
@@ -349,6 +375,8 @@ public class CamaraNativaPlugin
   }
 
   private void detener() {
+    if (sensores != null) sensores.unregisterListener(oyenteGiro);
+    giro = 0;
     if (analisis != null) analisis.clearAnalyzer();
     if (proveedor != null) proveedor.unbindAll();
     if (productor != null) productor.release();
@@ -407,7 +435,7 @@ public class CamaraNativaPlugin
       final ImageProxy.PlaneProxy y = img.getPlanes()[0];
       final long t0 = SystemClock.elapsedRealtimeNanos();
       final byte[] r = MotorNativo.leer(y.getBuffer(), img.getWidth(), img.getHeight(), y.getRowStride(),
-          formatos, modo, presupuestoUs, ronda);
+          formatos, giro > GIRO_MOVIENDO ? modo | MODO_MOVIENDO : modo, presupuestoUs, ronda);
       if (r == null) return;
       final String motor = new String(r, StandardCharsets.UTF_8);
       ronda = numero(motor, "\"ronda\":", ronda);
@@ -436,7 +464,8 @@ public class CamaraNativaPlugin
           .append(",\"analizados\":").append(analizados)
           .append(",\"sensor\":").append(completados)
           .append(",\"msMotor\":").append((SystemClock.elapsedRealtimeNanos() - t0) / 1_000_000L)
-          .append(",\"edad\":").append(edad >= 0 && edad < 5000 ? edad : -1);
+          .append(",\"edad\":").append(edad >= 0 && edad < 5000 ? edad : -1)
+          .append(",\"giroRad\":").append(Math.round(giro * 100) / 100.0);
       if (e != null) {
         ev.append(",\"exp\":").append(e.expActual)
             .append(",\"iso\":").append(e.isoActual)

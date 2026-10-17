@@ -102,7 +102,48 @@ struct Escena {
   std::function<Img(const Codigo&)> crear;
 };
 
+#ifdef ML_CON_OPENCV
+#include "detector.h"
+// BANCO_RECORTE=<archivo>: guarda el perfil (filas 35-65%) de los recortes de
+// OpenCV de un EAN-13 movido 7 px (escala 1.0), para comparar con los datos
+// de entrenamiento de las redes.
+static void volcarRecortes(const char* ruta) {
+  const Codigo c{"EAN-13", BarcodeFormat::EAN13, "775360881571", "7753608815714", 300, 140};
+  for (int largo : {3, 5, 7, 9}) {
+    Img img = escena(c, 1.0f);
+    Img t(img.size());
+    for (int y = 0; y < H; y++)
+      for (int x = 0; x < W; x++) {
+        float a = 0; int n = 0;
+        for (int d = -largo / 2; d <= largo / 2; d++) { a += img[y * W + std::clamp(x + d, 0, W - 1)]; n++; }
+        t[y * W + x] = a / n;
+      }
+    ruido(t, 4, 11);
+    const auto b = aBytes(t);
+    for (const auto& q : det::detectar(b.data(), W, H, W)) {
+      const auto r = det::enderezar(b.data(), W, H, W, q);
+      FILE* f = std::fopen(ruta, "a");
+      std::fprintf(f, "%d %d %d", largo, r.img.ancho, r.img.alto);
+      const int y0 = (int)(r.img.alto * 0.35f), y1 = std::max(y0 + 1, (int)(r.img.alto * 0.65f));
+      for (int x = 0; x < r.img.ancho; x++) {
+        float s = 0;
+        for (int y = y0; y < y1; y++) s += r.img.px[(size_t)y * r.img.ancho + x];
+        std::fprintf(f, " %.0f", s / (y1 - y0));
+      }
+      std::fprintf(f, "\n");
+      std::fclose(f);
+    }
+  }
+}
+#endif
+
 int main() {
+#ifdef ML_CON_OPENCV
+  if (const char* r = std::getenv("BANCO_RECORTE")) {
+    volcarRecortes(r);
+    return 0;
+  }
+#endif
   const std::vector<Codigo> codigos = {
       {"EAN-13", BarcodeFormat::EAN13, "775018200012", "7750182000123", 300, 140},
       {"Code128", BarcodeFormat::Code128, "LOTE-2026-A15", "LOTE-2026-A15", 380, 120},
@@ -363,7 +404,7 @@ int main() {
       for (int i = 0; i < 12; i++) s += (d[i] - '0') * (i % 2 ? 3 : 1);
       return d + (char)('0' + (10 - s % 10) % 10);
     };
-    int okZx = 0, okMotor = 0, okGris = 0, casos = 0, falsosM = 0, verificados = 0;
+    int okZx = 0, okMotor = 0, okGris = 0, casos = 0, falsosM = 0, verificados = 0, ubicados = 0;
     std::string tabla;
     for (float escala : {0.8f, 1.0f, 1.3f}) {
       tabla += "  escala " + std::to_string(escala).substr(0, 3) + " (" +
@@ -413,6 +454,11 @@ int main() {
           }
           mo += leido;
           gr += deGris;
+          if (std::getenv("BANCO_PASOS"))
+            std::printf("    movido %dpx esc %.1f: leido=%d regiones=%d red=%dus restaurado=%dus gris=%dus\n", largo, escala,
+                        leido, info.regiones, info.tiempo_paso_us[ML_PASO_RED], info.tiempo_paso_us[ML_PASO_RESTAURADO],
+                        info.tiempo_paso_us[ML_PASO_GRIS]);
+          ubicados += info.regiones > 0 || leido;
         }
         okZx += zx;
         okMotor += mo;
@@ -425,7 +471,70 @@ int main() {
     std::printf("MOVIDO (desenfoque horizontal; zxing/motor de 5, g = por tonos de gris):\n%s", tabla.c_str());
     std::printf("MOVIDO: zxing solo %d/%d, motor %d/%d (%d por tonos de gris, %d lecturas verificadas), falsos %d\n", okZx,
                 casos, okMotor, casos, okGris, verificados, falsosM);
+    std::printf("MOVIDO: OpenCV ubico el codigo en %d/%d\n", ubicados, casos);
     falsos += falsosM;
+  }
+
+  // --- Imagen movida, otros 1D (logistica): Code 128 e ITF-14.
+  {
+    const std::vector<Codigo> otros = {
+        {"Code128", BarcodeFormat::Code128, "LOTE-2026-A15", "LOTE-2026-A15", 380, 120},
+        {"Code128", BarcodeFormat::Code128, "0177501820001245", "0177501820001245", 400, 120},
+        {"ITF-14", BarcodeFormat::ITF, "17750182000124", "17750182000124", 420, 120},
+    };
+    int okZx = 0, okMotor = 0, okRed = 0, casos = 0, falsosO = 0;
+    std::string tabla;
+    for (const auto& c : otros) {
+      tabla += std::string("  ") + c.nombre + " " + c.texto + ":";
+      for (int largo : {0, 3, 5, 7, 9}) {
+        Img img = escena(c, 1.0f);
+        if (largo > 0) {
+          Img t(img.size());
+          for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+              float acum = 0;
+              int n = 0;
+              for (int d = -largo / 2; d <= largo / 2; d++) {
+                acum += img[y * W + std::clamp(x + d, 0, W - 1)];
+                n++;
+              }
+              t[y * W + x] = acum / n;
+            }
+          img.swap(t);
+        }
+        ruido(img, 4, 21 + largo);
+        const auto b = aBytes(img);
+        casos++;
+        const auto base = ReadBarcodes(ImageView(b.data(), W, H, ImageFormat::Lum), ReaderOptions().setFormats(c.formato));
+        const bool zx = !base.empty() && base[0].text() == c.esperado;
+        okZx += zx;
+        ml_codigo sal[8];
+        ml_info info;
+        bool leido = false, deRed = false;
+        for (int cuadro = 0; cuadro < 2 && !leido; cuadro++) {
+          const int n = ml_leer(b.data(), W, H, W, ML_PIXEL_LUMA, 0, ML_MODO_TODOS, 0, cuadro, sal, 8, &info);
+          for (int k = 0; k < n; k++) {
+            if (sal[k].sin_leer) continue;
+            if (c.esperado == sal[k].texto) {
+              leido = true;
+              deRed = deRed || sal[k].paso == ML_PASO_RESTAURADO;
+            } else {
+              std::printf("  LECTURA FALSA (movido 1D %d px): '%s' en vez de %s, paso %d\n", largo, sal[k].texto,
+                          c.esperado.c_str(), sal[k].paso);
+              falsosO++;
+            }
+          }
+        }
+        okMotor += leido;
+        okRed += deRed;
+        tabla += " " + std::to_string(largo) + "px:" + (zx ? "z" : "-") + (leido ? (deRed ? "R" : "M") : "-");
+      }
+      tabla += "\n";
+    }
+    std::printf("MOVIDO 1D (z = zxing solo, M = motor, R = motor con la red de restauracion):\n%s", tabla.c_str());
+    std::printf("MOVIDO 1D: zxing solo %d/%d, motor %d/%d (%d por restauracion), falsos %d\n", okZx, casos, okMotor,
+                casos, okRed, falsosO);
+    falsos += falsosO;
   }
 
   // --- Sin codigos: texto impreso y rayas (carton corrugado, rejillas). Toda

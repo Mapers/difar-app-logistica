@@ -1,6 +1,8 @@
 #include "motor_lector.h"
 #include "preparar.h"
 #include "ean_gris.h"
+#include "red_ean.h"
+#include "red_restaurar.h"
 #ifdef ML_CON_OPENCV
 #include "detector.h"
 #endif
@@ -345,6 +347,8 @@ struct Trabajo {
                         true, false, validar) > 0)
           continue;
         if (leerGris(rec, a)) continue;
+        if (leerRed(rec, a)) continue;
+        if (leerRestaurado(rec, a)) continue;
         leidoK[k] = 0;
       }
     };
@@ -395,6 +399,89 @@ struct Trabajo {
     l.paso = ML_PASO_GRIS;
     l.aEntrada = a;
     return lector.agregar(std::move(l)) > 0;
+  }
+#endif
+
+#ifdef ML_CON_OPENCV
+  // Ultimo intento con un EAN-13/UPC-A: la red neuronal propia. Solo en los
+  // cuadros de pasos dificiles (como el lector en tonos de gris).
+  bool leerRed(const det::Recorte& rec, const Afin& a) {
+    const int32_t m = lector.mascara;
+    if (liviano || !(m == 0 || (m & (ML_EAN13 | ML_UPCA)))) return false;
+    const auto t0 = Reloj::now();
+    red::Resultado r;
+    const bool ok = red::leerEan(rec.img, r);
+    tiempos[ML_PASO_RED] += (int)std::chrono::duration_cast<std::chrono::microseconds>(Reloj::now() - t0).count();
+    if (!ok) return false;
+    // Los digitos tienen que calzar con los tonos de gris (o no poder saberse).
+    if (gris::verificarEan(rec.img, r.texto) < 0) return false;
+    Lectura l;
+    l.texto = r.texto;
+    l.formato = BarcodeFormat::EAN13;
+    if (m != 0 && !(m & ML_EAN13)) {
+      if (r.texto[0] != '0') return false;
+      l.texto = r.texto.substr(1);
+      l.formato = BarcodeFormat::UPCA;
+    }
+    const float w = (float)rec.img.ancho, h = (float)rec.img.alto;
+    l.pos = {PointF(0, h * 0.35f), PointF(w, h * 0.35f), PointF(w, h * 0.65f), PointF(0, h * 0.65f)};
+    l.paso = ML_PASO_RED;
+    l.aEntrada = a;
+    return lector.agregar(std::move(l)) > 0;
+  }
+#endif
+
+#ifdef ML_CON_OPENCV
+  // Cualquier 1D borroso o movido: la red de restauracion saca las barras
+  // nitidas y zxing las lee (con sus controles). Solo en los cuadros de pasos
+  // dificiles.
+  bool leerRestaurado(const det::Recorte& rec, const Afin& a) {
+    if (liviano) return false;
+    const auto t0 = Reloj::now();
+    std::vector<uint8_t> barras;
+    const bool ok = red::restaurar(rec.img, barras);
+    auto medir = [&] {
+      tiempos[ML_PASO_RESTAURADO] +=
+          (int)std::chrono::duration_cast<std::chrono::microseconds>(Reloj::now() - t0).count();
+    };
+    if (!ok || std::count(barras.begin(), barras.end(), 1) < 10) {
+      medir();
+      return false;
+    }
+    // Imagen nitida: 2 pixeles por muestra, 8 filas iguales.
+    constexpr int kEsc = 2, kFilas = 8;
+    const int w = (int)barras.size() * kEsc;
+    std::vector<uint8_t> px((size_t)w * kFilas);
+    for (int x = 0; x < w; x++) {
+      const uint8_t v = barras[x / kEsc] ? 0 : 255;
+      for (int y = 0; y < kFilas; y++) px[(size_t)y * w + x] = v;
+    }
+    auto o = lector.opciones(false);
+    o.setMaxNumberOfSymbols(1);
+    o.setTryRotate(false);
+    o.setTryDownscale(false);
+    auto encontrados = ReadBarcodes(ImageView(px.data(), w, kFilas, ImageFormat::Lum), o);
+    medir();
+    for (auto& b : encontrados) {
+      if (!b.isValid() || !confiable(b)) continue;
+      const auto f = b.format();
+      if ((f == BarcodeFormat::EAN13 || f == BarcodeFormat::UPCA || f == BarcodeFormat::EAN8) &&
+          gris::verificarEan(rec.img, f == BarcodeFormat::UPCA ? "0" + b.text() : b.text()) < 0)
+        continue;
+      Lectura l(b, ML_PASO_RESTAURADO, a, false);
+      // Posicion: de la imagen restaurada al recorte (banda central).
+      const float escala = (float)(rec.img.ancho - 1) / ((float)barras.size() - 1) / kEsc;
+      float x0 = 1e9f, x1 = -1e9f;
+      for (const auto& p : b.position()) {
+        x0 = std::min(x0, (float)p.x);
+        x1 = std::max(x1, (float)p.x);
+      }
+      const float h = (float)rec.img.alto;
+      l.pos = {PointF(x0 * escala, h * 0.35f), PointF(x1 * escala, h * 0.35f), PointF(x1 * escala, h * 0.65f),
+               PointF(x0 * escala, h * 0.65f)};
+      if (lector.agregar(std::move(l)) > 0) return true;
+    }
+    return false;
   }
 #endif
 
@@ -577,8 +664,9 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     const bool conDetector = false;
 #endif
     t->conDetector = conDetector;
-    // Cuadro de pasos dificiles que viene mas borroso que el promedio: se
-    // aplaza al siguiente (hasta 3 veces seguidas).
+    // Cuadro de pasos dificiles que viene mas borroso que el promedio, o con
+    // el telefono moviendose rapido (giroscopio): se aplaza al siguiente
+    // (hasta 3 veces seguidas).
     bool aplazar = false;
     {
       const int n16 = t->est.nitidez * 16;
@@ -586,7 +674,8 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
       prom = prom == 0 ? n16 : prom + (n16 - prom) / 8;
       gNitidezProm = prom;
       const bool pesado = (modo & ML_MODO_INTERCALAR) && ronda % 4 == 0;
-      if (pesado && n16 * 100 < prom * 85 && gAplazados.load() < 3) {
+      const bool moviendo = (modo & ML_MODO_MOVIENDO) != 0;
+      if (pesado && (moviendo || n16 * 100 < prom * 85) && gAplazados.load() < 3) {
         aplazar = true;
         gAplazados++;
       } else if (pesado) {
@@ -677,9 +766,13 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     int32_t escritos = 0;
     for (const auto& lec : leidos) {
       if (escritos >= max_salida) break;
-      int verificado = lec.paso == ML_PASO_GRIS ? 1 : 0;
+      // Lo leido en tonos de gris no se da por verificado: en el banco
+      // sintetico se equivoco 1 vez cada ~6000 casos dificiles; la app lo
+      // cuenta cuando se repite.
+      int verificado = 0;
 #ifdef ML_CON_OPENCV
-      if (verificado == 0 && esEan(lec.formato)) {
+      if (lec.paso != ML_PASO_GRIS && lec.paso != ML_PASO_RED && lec.paso != ML_PASO_RESTAURADO &&
+          esEan(lec.formato)) {
         verificado = verificarLectura(lec, t->px, t->ancho, t->alto, t->fila);
         if (verificado < 0) {
           info->ilegibles++; // los digitos no calzan con la imagen: lectura falsa

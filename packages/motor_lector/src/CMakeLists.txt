@@ -21,6 +21,8 @@ add_library(motor_lector SHARED
   "motor_lector.cpp"
   "preparar.cpp"
   "ean_gris.cpp"
+  "red_ean.cpp"
+  "red_restaurar.cpp"
 )
 target_link_libraries(motor_lector PRIVATE ZXing::ZXing)
 

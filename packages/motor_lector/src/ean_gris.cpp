@@ -463,9 +463,10 @@ bool decodificar(const Perfil& pf, const Estructura& e, bool ean13, const Guarda
   // Claridad: cada digito elegido tiene que ser tambien el mejor en su
   // posicion por si solo, el dibujo tiene que calzar, y cualquier otra
   // combinacion valida tiene que costar bastante mas (margen relativo).
-  // Umbrales medidos en un banco con 400 casos movidos o borrosos y 3000
-  // perfiles sin EAN (rayas, texto, otros 1D): 0 lecturas falsas, y el
-  // margen exigido es 2,5 veces el mayor que dio un perfil sin EAN.
+  // Umbrales medidos con 11200 perfiles sinteticos (desenfoque, movimiento,
+  // perspectiva, tinta corrida, luz despareja, reflejos, bordes de etiqueta)
+  // y perfiles sin EAN: 0 lecturas equivocadas; el margen exigido (0,15) es
+  // 3 veces el mayor de una lectura equivocada en ese banco.
   float maximo = 0;
   int distintos = 0;
   for (int i = 0; i < np; i++) {
@@ -481,7 +482,28 @@ bool decodificar(const Perfil& pf, const Estructura& e, bool ean13, const Guarda
     for (int d : sol.digitos) t += (char)('0' + d);
     DEP("  digitos %s distintos=%d maximo=%.3f promedio=%.3f\n", t.c_str(), distintos, maximo, promedio);
   }
-  if (distintos > 0 || maximo > 0.08f || promedio > 0.05f) return false;
+#ifndef GRIS_SIN_UMBRALES
+  if (distintos > 0 || maximo > 0.06f || promedio > 0.05f) return false;
+#endif
+  // Reflejo que quema parte del codigo: las barras de ahi no se ven y la
+  // eleccion "completa" digitos que igual cumplen el verificador (banco
+  // sintetico: 7891505528525 leido 7891505528785).
+  {
+    // Un espacio blanco puede quedar saturado (papel muy iluminado); un
+    // reflejo es una zona saturada mas ancha que 5 modulos (los espacios de un
+    // EAN miden hasta 4).
+    const int x0 = std::max(0, (int)g.mapa(0)), x1 = std::min(pf.n(), (int)g.mapa((float)e.modulos));
+    const float m = (g.mapa.x[2] - g.mapa.x[0]) / e.modulos;
+    int corrida = 0, mayor = 0;
+    for (int x = x0; x < x1; x++) {
+      corrida = pf.p[x] >= 250 ? corrida + 1 : 0;
+      mayor = std::max(mayor, corrida);
+    }
+    DEP("QUEMADOS %d\n", (int)(mayor * 10 / std::max(m, 0.1f)));
+#ifndef GRIS_SIN_UMBRALES
+    if (mayor > 5 * m) return false;
+#endif
+  }
   float margen = 1e9f;
   for (int i = 0; i < np; i++) {
     const int d = sol.digitos[ean13 ? i + 1 : i];
@@ -493,7 +515,9 @@ bool decodificar(const Perfil& pf, const Estructura& e, bool ean13, const Guarda
     for (int d : sol.digitos) t += (char)('0' + d);
     DEP("MET %s %d %.4f %.4f %.4f %.4f\n", t.c_str(), distintos, maximo, promedio, margen, g.costo);
   }
-  if (margen < 0.1f * sol.costo) return false;
+#ifndef GRIS_SIN_UMBRALES
+  if (margen < 0.15f * sol.costo) return false;
+#endif
 
   r.texto.clear();
   for (int d : sol.digitos) r.texto += (char)('0' + d);

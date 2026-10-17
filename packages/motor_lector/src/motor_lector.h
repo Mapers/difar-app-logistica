@@ -44,6 +44,7 @@ extern "C" {
 #define ML_MODO_CUADRO_COMPLETO 2 // todo el cuadro (si no, la zona central)
 #define ML_MODO_SOLO_RAPIDO 4     // solo el paso rapido (camara sin disparar: ahorra bateria)
 #define ML_MODO_INTERCALAR 8      // pasos dificiles 1 de cada 4 cuadros ([ronda]), con tope de 200 ms
+#define ML_MODO_MOVIENDO 16       // el telefono se mueve rapido (giroscopio): se aplazan los pasos dificiles
 
 // Paso que logro la lectura (para el registro y para afinar).
 #define ML_PASO_RAPIDO 1     // zona central (75%), sin preparar
@@ -56,7 +57,9 @@ extern "C" {
 #define ML_PASO_DETECTOR 8   // OpenCV ubico el codigo; recorte enderezado, sin preparar
 #define ML_PASO_DETECTOR_PREP 9 // idem, recorte con contraste ecualizado
 #define ML_PASO_GRIS 10      // recorte de OpenCV leido en tonos de gris (EAN/UPC borroso o movido)
-#define ML_PASOS 11
+#define ML_PASO_RED 11       // recorte de OpenCV leido por la red neuronal propia (EAN-13/UPC-A)
+#define ML_PASO_RESTAURADO 12 // recorte de OpenCV con las barras restauradas por la red propia, leido por zxing (todos los 1D)
+#define ML_PASOS 13
 
 typedef struct {
   int32_t formato;      // uno de ML_* (0 si no esta en la lista)

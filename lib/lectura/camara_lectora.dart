@@ -134,7 +134,12 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   int _procesados = 0, _cuadrosConCodigo = 0;
   int _msMotorTotal = 0, _msMotorMax = 0, _edadTotal = 0, _edadMax = 0, _conEdad = 0, _leidosEnLapso = 0;
   int _usRapido = 0, _usDetector = 0, _usDificiles = 0, _conDificiles = 0;
+  // Dentro del detector: lector en tonos de gris y redes propias (EAN y restauracion).
+  static const _pasosRedes = {PasoMotor.gris, PasoMotor.red, PasoMotor.restaurado};
+  int _usRedes = 0, _conRedes = 0;
   int _expNs = 0, _iso = 0;
+  double _giroTotal = 0, _giroMax = 0;
+  int _cuadrosMoviendo = 0;
   String _modoExp = '?';
   bool _tamanoRegistrado = false;
 
@@ -359,6 +364,9 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     _giro = giro;
     ultimaInfo = r.info;
     _expNs = cuadro.exposicionNs;
+    _giroTotal += cuadro.velocidadGiro;
+    if (cuadro.velocidadGiro > _giroMax) _giroMax = cuadro.velocidadGiro;
+    if (cuadro.velocidadGiro > 1.0) _cuadrosMoviendo++;
     _iso = cuadro.iso;
     if (cuadro.modoExposicion != _modoExp) {
       if (_modoExp != '?') registrar('CAMARA', 'exposicion $_modoExp -> ${cuadro.modoExposicion}');
@@ -388,8 +396,13 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     final tp = r.info.tiempoPorPaso;
     _usRapido += tp[PasoMotor.rapido] ?? 0;
     _usDetector += tp[PasoMotor.detector] ?? 0;
+    final redes = _pasosRedes.fold(0, (s, p) => s + (tp[p] ?? 0));
+    if (redes > 0) {
+      _usRedes += redes;
+      _conRedes++;
+    }
     final dificiles = tp.entries
-        .where((e) => e.key != PasoMotor.rapido && e.key != PasoMotor.detector)
+        .where((e) => e.key != PasoMotor.rapido && e.key != PasoMotor.detector && !_pasosRedes.contains(e.key))
         .fold(0, (s, e) => s + e.value);
     if (dificiles > 0) {
       _usDificiles += dificiles;
@@ -446,16 +459,21 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
           'codigos_leidos=$_leidosEnLapso motor prom=${_msMotorTotal ~/ _procesados}ms max=${_msMotorMax}ms '
           'retraso_cuadro prom=${_conEdad == 0 ? '?' : _edadTotal ~/ _conEdad}ms max=${_edadMax}ms '
           '[rapido=${_usRapido ~/ _procesados ~/ 1000}ms opencv=${_usDetector ~/ _procesados ~/ 1000}ms '
-          'dificiles=${_conDificiles == 0 ? 0 : _usDificiles ~/ _conDificiles ~/ 1000}ms en $_conDificiles cuadros]'
+          'dificiles=${_conDificiles == 0 ? 0 : _usDificiles ~/ _conDificiles ~/ 1000}ms en $_conDificiles cuadros '
+          'gris+redes=${_conRedes == 0 ? 0 : _usRedes ~/ _conRedes ~/ 1000}ms en $_conRedes cuadros]'
           '${i == null ? '' : ' brillo=${i.brillo} contraste=${i.contraste} nitidez=${i.nitidez} reflejo=${i.quemados}%'} '
           'exposicion=${(_expNs / 1e6).toStringAsFixed(1)}ms iso=$_iso $_modoExp '
+          'giro prom=${(_giroTotal / _procesados).toStringAsFixed(2)} max=${_giroMax.toStringAsFixed(2)}rad/s '
+          'moviendo=$_cuadrosMoviendo '
           'linterna=${linterna ? "si" : "no"} zoom=${aumento.toStringAsFixed(1)}');
     }
+    _giroTotal = _giroMax = 0;
+    _cuadrosMoviendo = 0;
     _sensorInicio = _ultimoSensor;
     _analizadosInicio = _ultimoAnalizado;
     _procesados = _cuadrosConCodigo = 0;
     _msMotorTotal = _msMotorMax = _edadTotal = _edadMax = _conEdad = _leidosEnLapso = 0;
-    _usRapido = _usDetector = _usDificiles = _conDificiles = 0;
+    _usRapido = _usDetector = _usDificiles = _conDificiles = _usRedes = _conRedes = 0;
     _reloj
       ..reset()
       ..start();
