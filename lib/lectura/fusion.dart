@@ -50,8 +50,10 @@ Offset aVertical(Offset p, Size sensor, int giro) => switch (giro % 360) {
       _ => p,
     };
 
-/// Filtra lecturas dudosas, que se aceptan solo si se vieron igual en uno de
-/// los 2 cuadros anteriores (un error no se repite igual):
+/// Filtra lecturas dudosas, que se aceptan solo si se vieron igual otra vez
+/// en los ultimos [ventana] (un error no se repite igual; en el telefono los
+/// falsos salieron todos distintos entre si, y los reales se repetian pero
+/// no en cuadros seguidos porque los de en medio salian borrosos):
 /// * formatos sin digito de control (ITF, Code 39/93, Codabar): un pedazo
 ///   del codigo tambien "decodifica";
 /// * lo leido sobre imagen preparada (contraste, normalizacion, ampliacion,
@@ -62,30 +64,31 @@ class Fusion {
   /// Pasos que leen la imagen original, sin prepararla (PasoMotor.nombre).
   static const _pasosDirectos = {'rapido', 'completo', 'invertido', 'detector', ''};
 
-  int _cuadro = 0;
-  final _visto = <String, int>{};
+  static const ventana = Duration(milliseconds: 1500);
+
+  final _visto = <String, DateTime>{};
 
   /// Los retenidos en el ultimo cuadro (para el registro).
   List<CodigoVisto> retenidos = const [];
 
-  List<CodigoVisto> confirmar(List<CodigoVisto> codigos) {
-    _cuadro++;
+  List<CodigoVisto> confirmar(List<CodigoVisto> codigos, [DateTime? ahora]) {
+    final t = ahora ?? DateTime.now();
     final aceptados = <CodigoVisto>[];
     final dudosos = <CodigoVisto>[];
     final yaEnCuadro = <String>{};
     for (final c in codigos) {
       if (!yaEnCuadro.add(c.valor)) continue;
       final anterior = _visto[c.valor];
-      _visto[c.valor] = _cuadro;
+      _visto[c.valor] = t;
       final dudoso = (c.simbologia?.sinControl ?? false) || !_pasosDirectos.contains(c.detalle);
-      if (!dudoso || (anterior != null && _cuadro - anterior <= 2)) {
+      if (!dudoso || (anterior != null && t.difference(anterior) <= ventana)) {
         aceptados.add(c);
       } else {
         dudosos.add(c);
       }
     }
     retenidos = dudosos;
-    if (_visto.length > 500) _visto.removeWhere((_, cuadro) => _cuadro - cuadro > 2);
+    if (_visto.length > 500) _visto.removeWhere((_, v) => t.difference(v) > ventana);
     return aceptados;
   }
 }

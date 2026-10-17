@@ -303,7 +303,8 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
     final i = captura.info;
     registrar('LECTURA', '${v.valor} ${v.formato}'
         '${v.detalle.isNotEmpty ? " paso=${v.detalle}" : ""} '
-        '${r == ResultadoLectura.nuevo ? "nuevo" : "sumado"} en ${_desdeToque.elapsedMilliseconds}ms '
+        '${r == ResultadoLectura.nuevo ? "nuevo" : "sumado"} visible_hace=${_camara.msVisible ?? 0}ms '
+        'desde_lectura_anterior=${_desdeToque.elapsedMilliseconds}ms '
         '(${_sostenido ? "mantener" : "toque"}) a_la_vista=${captura.codigos.length} juntos=$grupo '
         '${tamanoCodigo(v)} imagen=${captura.imagen.width.toInt()}x${captura.imagen.height.toInt()}'
         '${i == null ? '' : ' brillo=${i.brillo} nitidez=${i.nitidez} reflejo=${i.quemados}% '
@@ -314,6 +315,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
   /// Pitido, vibracion y resaltado (uno por lectura o por grupo de lecturas).
   void _avisarLectura(String valor, ResultadoLectura r) {
     _leyoEnDisparo = true;
+    _camara.reiniciarVisible();
     _desdeToque
       ..reset()
       ..start();

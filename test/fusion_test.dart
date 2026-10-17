@@ -13,6 +13,19 @@ void main() {
     expect(f.confirmar([codigo('7750182000123', Simbologia.ean13, 'C++')]).single.valor, '7750182000123');
   });
 
+  test('un real que se repite con cuadros borrosos en medio (dentro de 1,5 s) entra', () {
+    final f = Fusion();
+    final t0 = DateTime(2026, 10, 16, 22, 47);
+    final c = codigo('2050000610684', Simbologia.ean13, 'C++', paso: 'detector+contraste');
+    expect(f.confirmar([c], t0), isEmpty);
+    expect(f.confirmar([], t0.add(const Duration(milliseconds: 300))), isEmpty);
+    expect(f.confirmar([c], t0.add(const Duration(milliseconds: 900))).single.valor, '2050000610684');
+    // Si vuelve despues de la ventana, empieza de nuevo.
+    final g = Fusion();
+    expect(g.confirmar([c], t0), isEmpty);
+    expect(g.confirmar([c], t0.add(const Duration(seconds: 2))), isEmpty);
+  });
+
   test('ITF espera a verse igual en 2 cuadros', () {
     final f = Fusion();
     final itf = codigo('17750182000124', Simbologia.itf, 'C++');
@@ -22,11 +35,9 @@ void main() {
 
   test('una lectura parcial que no se repite nunca entra', () {
     final f = Fusion();
-    expect(f.confirmar([codigo('177501', Simbologia.itf, 'C++')]), isEmpty);
-    for (var i = 0; i < 3; i++) {
-      f.confirmar([]);
-    }
-    expect(f.confirmar([codigo('177501', Simbologia.itf, 'C++')]), isEmpty);
+    final t0 = DateTime(2026, 10, 16);
+    expect(f.confirmar([codigo('177501', Simbologia.itf, 'C++')], t0), isEmpty);
+    expect(f.confirmar([codigo('177501', Simbologia.itf, 'C++')], t0.add(const Duration(seconds: 3))), isEmpty);
   });
 
   test('EAN leido sobre imagen preparada espera a repetirse; una lectura falsa suelta no entra', () {

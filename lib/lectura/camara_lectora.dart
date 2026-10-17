@@ -78,10 +78,23 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   /// Medicion del ultimo cuadro (para el registro de fallos).
   InfoMotor? ultimaInfo;
 
+  /// Desde cuando hay un codigo a la vista (leido, retenido o ubicado por
+  /// OpenCV) sin interrupcion, para medir cuanto tarda una lectura desde que
+  /// el codigo aparece (y no desde la lectura anterior).
+  DateTime? _primerVisto;
+  int _cuadrosSinCodigo = 0;
+
+  /// Milisegundos desde que aparecio un codigo a la vista (null si no hay).
+  int? get msVisible => _primerVisto == null ? null : DateTime.now().difference(_primerVisto!).inMilliseconds;
+
+  /// Tras contar una lectura, la medicion empieza de nuevo para el siguiente.
+  void reiniciarVisible() => _primerVisto = null;
+
   // Estadisticas para el registro (se vuelcan cada 2 s).
   final _reloj = Stopwatch();
   int _recibidos = 0, _procesados = 0, _cuadrosConCodigo = 0;
   int _msMotorTotal = 0, _msMotorMax = 0, _msIdaTotal = 0, _msIdaMax = 0, _leidosEnLapso = 0;
+  int _usRapido = 0, _usDetector = 0, _usDificiles = 0, _conDificiles = 0;
   bool _tamanoRegistrado = false;
 
   bool get lista => _control?.value.isInitialized ?? false;
@@ -116,6 +129,9 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
         trasera,
         multiple || ajustes.altaResolucion ? ResolutionPreset.veryHigh : ResolutionPreset.high,
         enableAudio: false,
+        // 30 cuadros/s fijos: con poca luz la camara bajaba a 12-15 para
+        // alargar la exposicion, y eso borroneaba el movimiento (registro v0.9).
+        fps: 30,
         imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
       );
       await control.initialize();
@@ -272,6 +288,16 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     _msIdaTotal += msIda;
     if (msIda > _msIdaMax) _msIdaMax = msIda;
     if (r.codigos.isNotEmpty) _cuadrosConCodigo++;
+    final tp = r.info.tiempoPorPaso;
+    _usRapido += tp[PasoMotor.rapido] ?? 0;
+    _usDetector += tp[PasoMotor.detector] ?? 0;
+    final dificiles = tp.entries
+        .where((e) => e.key != PasoMotor.rapido && e.key != PasoMotor.detector)
+        .fold(0, (s, e) => s + e.value);
+    if (dificiles > 0) {
+      _usDificiles += dificiles;
+      _conDificiles++;
+    }
     _leidosEnLapso += r.codigos.length;
     if (_reloj.elapsedMilliseconds >= 2000) _volcarEstadisticas();
 
@@ -289,6 +315,13 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
 
     _linternaAutomatica(r.info);
     final confirmados = _fusion.confirmar(codigos);
+    final hayAlgo = codigos.isNotEmpty || r.info.regiones > 0;
+    if (hayAlgo) {
+      _primerVisto ??= DateTime.now();
+      _cuadrosSinCodigo = 0;
+    } else if (++_cuadrosSinCodigo >= 8) {
+      _primerVisto = null;
+    }
     for (final d in _fusion.retenidos) {
       registrar('DUDOSO', '${d.valor} ${d.formato} paso=${d.detalle} (se cuenta si se repite en el cuadro siguiente)');
     }
@@ -304,12 +337,15 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       registrar('CUADROS', 'en ${seg.toStringAsFixed(1)}s: recibidos=$_recibidos procesados=$_procesados '
           '(${(_procesados / seg).toStringAsFixed(1)}/s) con_codigo=$_cuadrosConCodigo '
           'codigos_leidos=$_leidosEnLapso motor prom=${_msMotorTotal ~/ _procesados}ms max=${_msMotorMax}ms '
-          'ida_y_vuelta prom=${_msIdaTotal ~/ _procesados}ms max=${_msIdaMax}ms'
+          'ida_y_vuelta prom=${_msIdaTotal ~/ _procesados}ms max=${_msIdaMax}ms '
+          '[rapido=${_usRapido ~/ _procesados ~/ 1000}ms opencv=${_usDetector ~/ _procesados ~/ 1000}ms '
+          'dificiles=${_conDificiles == 0 ? 0 : _usDificiles ~/ _conDificiles ~/ 1000}ms en $_conDificiles cuadros]'
           '${i == null ? '' : ' brillo=${i.brillo} contraste=${i.contraste} nitidez=${i.nitidez} reflejo=${i.quemados}%'} '
           'linterna=${linterna ? "si" : "no"} zoom=${aumento.toStringAsFixed(1)}');
     }
     _recibidos = _procesados = _cuadrosConCodigo = 0;
     _msMotorTotal = _msMotorMax = _msIdaTotal = _msIdaMax = _leidosEnLapso = 0;
+    _usRapido = _usDetector = _usDificiles = _conDificiles = 0;
     _reloj
       ..reset()
       ..start();
