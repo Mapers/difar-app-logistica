@@ -66,6 +66,12 @@ class PantallaAjustes extends StatelessWidget {
               onChanged: (v) => ajustes.exposicionPropia = v,
             ),
             SwitchListTile(
+              title: const Text('Zoom automatico'),
+              subtitle: const Text('Acerca la camara (2x) cuando los codigos se ven chicos o lejos.'),
+              value: ajustes.zoomAuto,
+              onChanged: (v) => ajustes.zoomAuto = v,
+            ),
+            SwitchListTile(
               title: const Text('Linterna automatica'),
               subtitle: const Text('Se enciende sola cuando hay poca luz.'),
               value: ajustes.linternaAuto,

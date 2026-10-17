@@ -21,6 +21,8 @@ class DatosCamara {
         zoomMin = (m['zoomMin'] as num).toDouble(),
         zoomMax = (m['zoomMax'] as num).toDouble(),
         exposicionManual = m['exposicionManual'] == true,
+        fps = (m['fps'] as num?)?.toInt() ?? 30,
+        diagnostico = (m['diagnostico'] as String?) ?? '',
         nucleos = (m['nucleos'] as num).toInt();
 
   /// Id de la textura de Flutter con la vista previa.
@@ -35,8 +37,15 @@ class DatosCamara {
   final int giroSensor;
   final double zoomMin, zoomMax;
 
-  /// La camara permite exposicion manual (tiempo corto propio).
+  /// La camara declara exposicion manual (MANUAL_SENSOR). Si no la declara
+  /// igual se prueba: ver [CuadroNativo.modoExposicion].
   final bool exposicionManual;
+
+  /// Cuadros por segundo fijos que se pidieron (60 si el sensor puede).
+  final int fps;
+
+  /// Nivel de la camara, capacidades y rangos (para el registro).
+  final String diagnostico;
   final int nucleos;
 }
 
@@ -53,7 +62,7 @@ class CuadroNativo {
         edadMs = m['edad'] as int,
         exposicionNs = (m['exp'] as int?) ?? 0,
         iso = (m['iso'] as int?) ?? 0,
-        exposicionManual = m['manual'] == true;
+        modoExposicion = (m['modoExp'] as String?) ?? '?';
 
   factory CuadroNativo.desdeJson(String texto) {
     final m = jsonDecode(texto) as Map<String, dynamic>;
@@ -77,7 +86,9 @@ class CuadroNativo {
 
   /// Exposicion e ISO con que el sensor tomo los ultimos cuadros.
   final int exposicionNs, iso;
-  final bool exposicionManual;
+
+  /// "propia" (1/250 s), "probando_propia", "auto_corta(ev=..)" o "auto".
+  final String modoExposicion;
 }
 
 /// Convierte el JSON del motor (jni_camara.cpp) al mismo resultado que [leerCuadro].

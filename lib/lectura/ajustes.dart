@@ -40,6 +40,10 @@ class Ajustes extends ChangeNotifier {
   bool get exposicionPropia => _prefs?.getBool('exposicion_propia') ?? true;
   set exposicionPropia(bool v) => _set(() => _prefs?.setBool('exposicion_propia', v));
 
+  /// Acerca la camara (2x) sola cuando los codigos salen chicos o lejos.
+  bool get zoomAuto => _prefs?.getBool('zoom_auto') ?? true;
+  set zoomAuto(bool v) => _set(() => _prefs?.setBool('zoom_auto', v));
+
   /// Enciende la linterna sola cuando hay poca luz.
   bool get linternaAuto => _prefs?.getBool('linterna_auto') ?? true;
   set linternaAuto(bool v) => _set(() => _prefs?.setBool('linterna_auto', v));

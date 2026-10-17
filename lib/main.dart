@@ -14,7 +14,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   await Registro.instancia.iniciar();
-  registrar('INICIO', 'DIFAR Logistica 0.11 en ${Platform.operatingSystemVersion}');
+  registrar('INICIO', 'DIFAR Logistica 0.12 en ${Platform.operatingSystemVersion}');
   // Errores de la app al registro, para verlos en el log que se comparte.
   final previo = FlutterError.onError;
   FlutterError.onError = (d) {

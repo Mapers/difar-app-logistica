@@ -67,10 +67,13 @@ Offset desdeVertical(Offset p, Size sensor, int giro) => switch (giro % 360) {
 /// * lo leido sobre imagen preparada (contraste, normalizacion, ampliacion,
 ///   giro): en el telefono salieron lecturas falsas que pasaban el digito
 ///   verificador del EAN-13 (1111130013606, 1551130053606... de un mismo
-///   codigo). Lo leido sobre la imagen original entra al instante.
+///   codigo). Lo leido sobre la imagen original entra al instante;
+/// * lo leido en un recorte de OpenCV (enderezado y ampliado): en el
+///   telefono (v0.11) salio 5750067000875 de la caja 7758467000875, 0,2 s
+///   despues de leerla bien, y se conto como otro producto.
 class Fusion {
   /// Pasos que leen la imagen original, sin prepararla (PasoMotor.nombre).
-  static const _pasosDirectos = {'rapido', 'completo', 'invertido', 'detector', ''};
+  static const _pasosDirectos = {'rapido', 'completo', 'invertido', ''};
 
   static const ventana = Duration(milliseconds: 1500);
 

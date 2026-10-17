@@ -75,11 +75,20 @@ void main() {
     expect(tamanoCodigo(c), 'largo=190px (2.0 px/barra)');
   });
 
-  test('Code 128 tambien se confirma en 2 cuadros; lo ubicado por OpenCV sin preparar entra enseguida', () {
+  test('Code 128 tambien se confirma en 2 cuadros', () {
     final f = Fusion();
     expect(f.confirmar([codigo(r'$1PJN7B$0', Simbologia.code128, 'C++')]), isEmpty);
-    expect(f.confirmar([codigo('7750182000123', Simbologia.ean13, 'C++', paso: 'detector')]).single.valor,
-        '7750182000123');
+  });
+
+  test('lo leido en un recorte de OpenCV espera a repetirse (lectura falsa del telefono v0.11)', () {
+    final f = Fusion();
+    final t0 = DateTime(2026, 10, 16, 23, 29, 4);
+    final real = codigo('7758467000875', Simbologia.ean13, 'C++', paso: 'detector');
+    final falso = codigo('5750067000875', Simbologia.ean13, 'C++', paso: 'detector');
+    expect(f.confirmar([real], t0), isEmpty);
+    expect(f.confirmar([real], t0.add(const Duration(milliseconds: 60))).single.valor, '7758467000875');
+    expect(f.confirmar([falso], t0.add(const Duration(milliseconds: 190))), isEmpty);
+    expect(f.confirmar([real], t0.add(const Duration(milliseconds: 250))).single.valor, '7758467000875');
   });
 
   test('desdeVertical deshace aVertical (tocar para enfocar)', () {

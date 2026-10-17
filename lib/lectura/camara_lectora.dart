@@ -130,7 +130,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   int _msMotorTotal = 0, _msMotorMax = 0, _edadTotal = 0, _edadMax = 0, _conEdad = 0, _leidosEnLapso = 0;
   int _usRapido = 0, _usDetector = 0, _usDificiles = 0, _conDificiles = 0;
   int _expNs = 0, _iso = 0;
-  bool _expManual = false;
+  String _modoExp = '?';
   bool _tamanoRegistrado = false;
 
   bool get lista => _datos != null;
@@ -183,8 +183,9 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       registrar('CAMARA', 'encendida (nativa CameraX) ${multiple ? "multiple" : "uno"} giro=${d.giroSensor} '
           'vista=${d.previaAncho}x${d.previaAlto} giro_vista=${d.giroListo ? "listo" : d.giroVista} '
           'zoom=${d.zoomMin.toStringAsFixed(1)}-${d.zoomMax.toStringAsFixed(1)} '
-          'exposicion=${!ajustes.exposicionPropia ? "automatica (ajuste)" : d.exposicionManual ? "propia 1/250s" : "automatica (la camara no permite manual)"} '
-          'formatos=${ajustes.grupo.name} nucleos=${d.nucleos}');
+          'exposicion=${!ajustes.exposicionPropia ? "automatica (ajuste)" : d.exposicionManual ? "propia 1/250s" : "se prueba propia (la camara no la declara)"} '
+          'fps=${d.fps} formatos=${ajustes.grupo.name} nucleos=${d.nucleos}');
+      registrar('CAMARA', 'sensor ${d.diagnostico}');
     } on PlatformException catch (e) {
       permisoDenegado = e.code == 'permiso';
       error = permisoDenegado ? null : '${e.code}: ${e.message ?? ''}';
@@ -236,7 +237,58 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     } catch (_) {}
   }
 
-  Future<void> fijarAumento(double x) async {
+  /// El operario eligio el aumento con el boton: el automatico no lo toca.
+  bool _zoomManual = false;
+  bool _zoomAutoActivo = false;
+  int _cuadrosChicos = 0;
+  DateTime _ultimoCodigo = DateTime.now();
+
+  Future<void> fijarAumento(double x) {
+    _zoomManual = x > 1.01;
+    _zoomAutoActivo = false;
+    return _aplicarAumento(x);
+  }
+
+  /// Zoom automatico: si los codigos salen chicos (menos de ~1,8 px por
+  /// barra en un EAN) acerca a 2x; vuelve a 1x cuando salen grandes o no
+  /// hay codigos a la vista por un rato.
+  void _zoomAutomatico(List<CodigoMotor> codigos) {
+    if (!ajustes.zoomAuto || _zoomManual || _datos == null || congelada) return;
+    final ahora = DateTime.now();
+    var mayor = 0.0;
+    for (final c in codigos) {
+      for (var i = 0; i < 4; i++) {
+        final a = c.esquinas[i], b = c.esquinas[(i + 1) % 4];
+        final d = math.sqrt(math.pow(a.$1 - b.$1, 2) + math.pow(a.$2 - b.$2, 2));
+        if (d > mayor) mayor = d;
+      }
+    }
+    if (mayor == 0) {
+      _cuadrosChicos = 0;
+      if (_zoomAutoActivo && ahora.difference(_ultimoCodigo) > const Duration(milliseconds: 2500)) {
+        _zoomAutoActivo = false;
+        registrar('CAMARA', 'zoom automatico 1x (sin codigos a la vista)');
+        unawaited(_aplicarAumento(1));
+      }
+      return;
+    }
+    _ultimoCodigo = ahora;
+    if (!_zoomAutoActivo && aumento <= 1.01) {
+      _cuadrosChicos = mayor < (multiple ? 130 : 170) ? _cuadrosChicos + 1 : 0;
+      if (_cuadrosChicos >= 4) {
+        _cuadrosChicos = 0;
+        _zoomAutoActivo = true;
+        registrar('CAMARA', 'zoom automatico 2x (codigo de ${mayor.round()}px)');
+        unawaited(_aplicarAumento(2));
+      }
+    } else if (_zoomAutoActivo && mayor > 640) {
+      _zoomAutoActivo = false;
+      registrar('CAMARA', 'zoom automatico 1x (codigo de ${mayor.round()}px)');
+      unawaited(_aplicarAumento(1));
+    }
+  }
+
+  Future<void> _aplicarAumento(double x) async {
     final d = _datos;
     aumento = d == null ? x : x.clamp(d.zoomMin, math.max(d.zoomMin, math.min(d.zoomMax, 8)));
     notifyListeners();
@@ -303,7 +355,10 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     ultimaInfo = r.info;
     _expNs = cuadro.exposicionNs;
     _iso = cuadro.iso;
-    _expManual = cuadro.exposicionManual;
+    if (cuadro.modoExposicion != _modoExp) {
+      if (_modoExp != '?') registrar('CAMARA', 'exposicion $_modoExp -> ${cuadro.modoExposicion}');
+      _modoExp = cuadro.modoExposicion;
+    }
     if (_sensorInicio < 0) {
       _sensorInicio = cuadro.sensor;
       _analizadosInicio = cuadro.analizados - 1;
@@ -356,6 +411,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     ];
 
     _linternaAutomatica(r.info);
+    _zoomAutomatico(r.codigos);
     final confirmados = _fusion.confirmar(codigos);
     final hayAlgo = codigos.isNotEmpty || r.info.regiones > 0;
     if (hayAlgo) {
@@ -386,7 +442,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
           '[rapido=${_usRapido ~/ _procesados ~/ 1000}ms opencv=${_usDetector ~/ _procesados ~/ 1000}ms '
           'dificiles=${_conDificiles == 0 ? 0 : _usDificiles ~/ _conDificiles ~/ 1000}ms en $_conDificiles cuadros]'
           '${i == null ? '' : ' brillo=${i.brillo} contraste=${i.contraste} nitidez=${i.nitidez} reflejo=${i.quemados}%'} '
-          'exposicion=${(_expNs / 1e6).toStringAsFixed(1)}ms iso=$_iso ${_expManual ? "propia" : "auto"} '
+          'exposicion=${(_expNs / 1e6).toStringAsFixed(1)}ms iso=$_iso $_modoExp '
           'linterna=${linterna ? "si" : "no"} zoom=${aumento.toStringAsFixed(1)}');
     }
     _sensorInicio = _ultimoSensor;

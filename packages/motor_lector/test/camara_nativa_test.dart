@@ -9,12 +9,12 @@ void main() {
         '"x":[1,2,3,4],"y":[5,6,7,8]}],"i":{"brillo":120,"contraste":40,"quemados":2,"linterna":0,'
         '"pasos":3,"ronda":5,"us":21000,"nitidez":14,"ilegibles":0,"hilos":4,"regiones":2,'
         '"tp":[0,8000,0,0,0,0,0,0,9000,0]}},"ancho":1920,"alto":1080,"fila":1920,"giro":90,'
-        '"analizados":7,"sensor":9,"msMotor":22,"edad":40,"exp":4000000,"iso":800,"manual":true}';
+        '"analizados":7,"sensor":9,"msMotor":22,"edad":40,"exp":4000000,"iso":800,"modoExp":"propia"}';
     final c = CuadroNativo.desdeJson(texto);
     expect(c.ancho, 1920);
     expect(c.giro, 90);
     expect(c.iso, 800);
-    expect(c.exposicionManual, isTrue);
+    expect(c.modoExposicion, 'propia');
     final r = c.resultado;
     expect(r.codigos, hasLength(2));
     expect(r.codigos.first.texto, '7750182000123');

@@ -295,7 +295,9 @@ struct Trabajo {
         leidoK[k] = 1; // se corrige abajo si ningun intento lee
         auto rec = det::enderezar(zona(), zw, zh, fila, qs[k]);
         const Afin a{rec.a, rec.b, rec.c, rec.d, rec.tx + zx, rec.ty + zy};
-        auto o = lector.opciones(false);
+        // El recorte esta enderezado (y ampliado si es chico): tambien
+        // es imagen preparada, se piden 3 lineas iguales.
+        auto o = lector.opciones(false, true);
         o.setMaxNumberOfSymbols(1);
         if (lector.leer(rec.img.vista(), o, ML_PASO_DETECTOR, a) > 0) continue;
         auto eq = det::clahe(rec.img);

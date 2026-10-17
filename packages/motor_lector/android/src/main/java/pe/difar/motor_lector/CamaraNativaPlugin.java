@@ -90,6 +90,7 @@ public class CamaraNativaPlugin
   private volatile int formatos, modo, presupuestoUs;
   private volatile boolean pausada, exposicionPropia = true, linterna;
   private int ronda;
+  private volatile boolean verificando;
   private int analizados;
 
   // Lo que reporta la camara (hilo de la camara).
@@ -201,8 +202,11 @@ public class CamaraNativaPlugin
     if (llamada.hasArgument("modo")) modo = ((Number) llamada.argument("modo")).intValue();
     if (llamada.hasArgument("presupuestoUs")) presupuestoUs = ((Number) llamada.argument("presupuestoUs")).intValue();
     if (llamada.hasArgument("exposicionPropia")) {
-      exposicionPropia = Boolean.TRUE.equals(llamada.argument("exposicionPropia"));
-      if (!exposicionPropia && exposicion != null && camara != null) exposicion.soltar(camara);
+      final boolean v = Boolean.TRUE.equals(llamada.argument("exposicionPropia"));
+      if (v != exposicionPropia) {
+        exposicionPropia = v;
+        if (exposicion != null) aplicar(exposicion.activar(v));
+      }
     }
   }
 
@@ -315,7 +319,11 @@ public class CamaraNativaPlugin
     pausada = false;
     camara = proveedor.bindToLifecycle(
         (LifecycleOwner) actividad.getActivity(), CameraSelector.DEFAULT_BACK_CAMERA, previa, analisis);
-    exposicion = new Exposicion(camara);
+    final ResolutionInfo ra = analisis.getResolutionInfo();
+    final ResolutionInfo rp = previa.getResolutionInfo();
+    exposicion = new Exposicion(camara, ra == null ? null : ra.getResolution(), rp == null ? null : rp.getResolution(),
+        exposicionPropia);
+    aplicar(exposicion.inicial());
     if (linterna) camara.getCameraControl().enableTorch(true);
 
     final Camera2CameraInfo info2 = Camera2CameraInfo.from(camara.getCameraInfo());
@@ -332,7 +340,9 @@ public class CamaraNativaPlugin
     m.put("giroSensor", giroSensor == null ? 90 : giroSensor);
     m.put("zoomMin", zoom == null ? 1.0 : (double) zoom.getMinZoomRatio());
     m.put("zoomMax", zoom == null ? 1.0 : (double) zoom.getMaxZoomRatio());
-    m.put("exposicionManual", exposicion.posible);
+    m.put("exposicionManual", exposicion.declaraManual);
+    m.put("fps", exposicion.fps);
+    m.put("diagnostico", exposicion.diagnostico);
     m.put("nucleos", Runtime.getRuntime().availableProcessors());
     r.success(m);
   }
@@ -405,6 +415,14 @@ public class CamaraNativaPlugin
       final Exposicion e = exposicion;
       if (e != null && exposicionPropia) {
         aplicar(e.ajustar(numero(motor, "\"brillo\":", 128), numero(motor, "\"quemados\":", 0)));
+        if (e.probando() && !verificando) {
+          // Se acaba de pedir manual: en 1,5 s se ve si el sensor lo respeta.
+          verificando = true;
+          principal.postDelayed(() -> {
+            verificando = false;
+            if (exposicion == e) aplicar(e.verificar());
+          }, 1500);
+        }
       }
       // Edad del cuadro al terminar (si el reloj del sensor es el de arranque).
       final long edad = (SystemClock.elapsedRealtimeNanos() - img.getImageInfo().getTimestamp()) / 1_000_000L;
@@ -421,7 +439,7 @@ public class CamaraNativaPlugin
       if (e != null) {
         ev.append(",\"exp\":").append(e.expActual)
             .append(",\"iso\":").append(e.isoActual)
-            .append(",\"manual\":").append(e.manual());
+            .append(",\"modoExp\":\"").append(e.modo()).append('"');
       }
       ev.append('}');
       final String texto = ev.toString();
