@@ -39,6 +39,11 @@ extern "C" {
 #define ML_AZTEC (1 << 13)
 #define ML_MICROQR (1 << 14)
 
+// [modo] de ml_leer (se combinan con |).
+#define ML_MODO_TODOS 1           // todos los codigos (no cortar con el primero)
+#define ML_MODO_CUADRO_COMPLETO 2 // todo el cuadro (si no, la zona central)
+#define ML_MODO_SOLO_RAPIDO 4     // solo el paso rapido (camara sin disparar: ahorra bateria)
+
 // Paso que logro la lectura (para el registro y para afinar).
 #define ML_PASO_RAPIDO 1     // zona central (75%), sin preparar
 #define ML_PASO_COMPLETO 2   // todo el cuadro, rotado/invertido/sin ruido
@@ -78,14 +83,15 @@ typedef struct {
 FFI_PLUGIN_EXPORT void ml_configurar(int32_t hilos);
 
 // Lee los codigos de un cuadro. Devuelve cuantos escribio en [salida].
-// [multiple] != 0: busca todos los codigos del cuadro (conteo multiple) y
-// junta lo que lea cada paso; si no, corta con el primero.
+// [modo]: ML_MODO_* combinados. Con ML_MODO_TODOS junta lo que lea cada
+// paso; si no, corta con el primero. Los pasos que preparan la imagen
+// exigen que mas lineas de barrido coincidan (evita lecturas falsas).
 // Primero el paso rapido; si no alcanza, los dificiles. En paralelo (por
 // defecto) corren todos a la vez en varios hilos. Uno tras otro (ver
 // ml_configurar): [presupuesto_us] es el tope por cuadro (0 = sin limite) y
 // [ronda] el numero de cuadro, para seguir donde quedo el anterior.
 FFI_PLUGIN_EXPORT int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, int32_t bytes_por_fila,
-                                  int32_t formato_pixel, int32_t formatos, int32_t multiple,
+                                  int32_t formato_pixel, int32_t formatos, int32_t modo,
                                   int32_t presupuesto_us, int32_t ronda, ml_codigo* salida,
                                   int32_t max_salida, ml_info* info);
 

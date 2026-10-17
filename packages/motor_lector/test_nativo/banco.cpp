@@ -191,7 +191,7 @@ int main() {
 
   // Tope por cuadro en la PC; en un telefono medio el mismo trabajo tarda ~3x.
   const int presupuesto = std::getenv("BANCO_US") ? std::atoi(std::getenv("BANCO_US")) : 15000;
-  int peores = 0, totalBase = 0, totalMotor = 0, peorCuadro = 0;
+  int peores = 0, totalBase = 0, totalMotor = 0, peorCuadro = 0, falsos = 0;
   double tiempoTotal = 0; // suma, en los leidos, del tiempo de todos los cuadros hasta leer
   const int hilos = std::getenv("BANCO_HILOS") ? std::atoi(std::getenv("BANCO_HILOS")) : 0;
   ml_configurar(hilos);
@@ -231,6 +231,13 @@ int main() {
         tiempos += " |";
       }
       bool okMotor = n > 0 && c.esperado == sal[0].texto;
+      // Lectura falsa: devolvio un texto que no es el del codigo. Es el peor
+      // error (cuenta un producto que no esta): el banco falla si hay alguna.
+      for (int k = 0; k < n; k++)
+        if (c.esperado != sal[k].texto) {
+          std::printf("  LECTURA FALSA: '%s' (paso %d) en vez de '%s'\n", sal[k].texto, sal[k].paso, c.esperado.c_str());
+          falsos++;
+        }
       if (okMotor) {
         // Las esquinas deben caer sobre el codigo (centrado en la escena).
         float mx = 0, my = 0;
@@ -255,5 +262,6 @@ int main() {
   const int total = (int)(escenas.size() * codigos.size());
   std::printf("\nzxing solo: %d/%d   motor: %d/%d   cuadro mas lento: %.1f ms   tiempo total hasta leer: %.0f ms\n",
               totalBase, total, totalMotor, total, peorCuadro / 1000.0, tiempoTotal / 1000.0);
-  return peores > 0 ? 1 : 0;
+  std::printf("lecturas falsas: %d\n", falsos);
+  return peores > 0 || falsos > 0 ? 1 : 0;
 }

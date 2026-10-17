@@ -93,15 +93,20 @@ struct Lectura {
 
 struct Lector {
   BarcodeFormats formatos;
-  bool multiple = false;
+  bool multiple = false; // todos los codigos (ML_MODO_TODOS)
   std::vector<Lectura> leidos;
   // Los pasos corren en paralelo: lo compartido va protegido.
   std::mutex cerrojo;
   std::atomic<bool> hayUno{false};
   std::atomic<int> ilegibles{0};
 
-  ReaderOptions opciones(bool esfuerzo) const {
+  // [preparada]: la imagen fue procesada (contraste, normalizacion,
+  // ampliacion...). Ahi es donde aparecen lecturas falsas que igual pasan el
+  // digito verificador (en el telefono: 1111130013606, 1551130053606 del
+  // mismo codigo), asi que se exige que mas lineas de barrido den lo mismo.
+  ReaderOptions opciones(bool esfuerzo, bool preparada = false) const {
     ReaderOptions o;
+    o.setMinLineCount(preparada ? 3 : 2);
     o.setFormats(formatos);
     o.setTextMode(TextMode::Plain);
     o.setTryRotate(true);
@@ -174,7 +179,11 @@ struct Trabajo {
   Afin enAjustada() const { return Afin::desplazar((float)rx, (float)ry); }
 
   void rapido() {
-    lector.leer(entrada().cropped(zx, zy, zw, zh), lector.opciones(false), ML_PASO_RAPIDO, enZona(), false, true);
+    // Sobre la imagen original y con mas lineas de barrido (tryHarder): lo
+    // normal se lee aca, sin preparar nada. Sin invertido (tiene su paso).
+    auto o = lector.opciones(true);
+    o.setTryInvert(false);
+    lector.leer(entrada().cropped(zx, zy, zw, zh), o, ML_PASO_RAPIDO, enZona(), false, true);
   }
   void invertido() {
     auto img = prep::invertir(zona(), zw, zh, fila);
@@ -184,7 +193,7 @@ struct Trabajo {
     // 1D: promedio a lo largo de las barras + normalizacion local (bolsas
     // arrugadas, sombras, reflejos parciales). Dos tamanos de vecindario:
     // el grande para manchas amplias, el chico para sombras cortadas.
-    auto o = lector.opciones(true);
+    auto o = lector.opciones(true, true);
     for (const int radio : {std::max(15, ancho / 33), std::max(10, ancho / 63)}) {
       auto img = prep::afinar1D(ajustada(), rw, rh, fila, 8, radio);
       lector.leer(img.vista(), o, ML_PASO_REFLEJOS, enAjustada());
@@ -203,12 +212,12 @@ struct Trabajo {
     lector.leer(img.vista(), lector.opciones(false), ML_PASO_ROTADO, t);
     if (!lector.listo()) {
       auto fino = prep::afinar1D(img.px.data(), img.ancho, img.alto, img.ancho, 6, std::max(15, img.ancho / 20));
-      lector.leer(fino.vista(), lector.opciones(true), ML_PASO_ROTADO, t);
+      lector.leer(fino.vista(), lector.opciones(true, true), ML_PASO_ROTADO, t);
     }
   }
   void pocaLuz() {
     auto img = prep::clahe(zona(), zw, zh, fila, 8, 8, 3.0f);
-    lector.leer(img.vista(), lector.opciones(true), ML_PASO_POCA_LUZ, enZona());
+    lector.leer(img.vista(), lector.opciones(true, true), ML_PASO_POCA_LUZ, enZona());
   }
   void completo() {
     // Con esfuerzo: mas lineas, rotaciones de 90 y 2D invertido.
@@ -219,10 +228,10 @@ struct Trabajo {
     const int aw = rw * 2 / 3, ah = rh * 2 / 3, ax = (rw - aw) / 2, ay = (rh - ah) / 2;
     const Afin t = Afin::desplazar((float)(rx + ax), (float)(ry + ay), 0.5f);
     auto img = prep::ampliar2x(ajustada() + (size_t)ay * fila + ax, aw, ah, fila);
-    lector.leer(prep::enfocar(img, 1.5f).vista(), lector.opciones(true), ML_PASO_AMPLIADO, t);
+    lector.leer(prep::enfocar(img, 1.5f).vista(), lector.opciones(true, true), ML_PASO_AMPLIADO, t);
     if (!lector.listo()) {
       auto fino = prep::afinar1D(img.px.data(), img.ancho, img.alto, img.ancho, 6, std::max(15, img.ancho / 20));
-      lector.leer(fino.vista(), lector.opciones(true), ML_PASO_AMPLIADO, t);
+      lector.leer(fino.vista(), lector.opciones(true, true), ML_PASO_AMPLIADO, t);
     }
   }
 
@@ -259,7 +268,7 @@ void copiarTexto(char* destino, size_t capacidad, const std::string& texto) {
 extern "C" void ml_configurar(int32_t hilos) { gHilos = std::max(0, (int)hilos); }
 
 extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, int32_t bytes_por_fila,
-                           int32_t formato_pixel, int32_t formatos, int32_t multiple, int32_t presupuesto_us,
+                           int32_t formato_pixel, int32_t formatos, int32_t modo, int32_t presupuesto_us,
                            int32_t ronda, ml_codigo* salida, int32_t max_salida, ml_info* info) {
   const auto inicio = Reloj::now();
   auto usado = [&] {
@@ -300,15 +309,16 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     info->hilos = hilos;
 
     t->lector.formatos = aFormatosZx(formatos);
-    t->lector.multiple = multiple != 0;
+    t->lector.multiple = (modo & ML_MODO_TODOS) != 0;
+    const bool completo = (modo & ML_MODO_CUADRO_COMPLETO) != 0;
     t->conTope = hilos <= 1 && presupuesto_us > 0;
     t->presupuesto_us = presupuesto_us;
-    t->zw = multiple ? ancho : ancho * 3 / 4;
-    t->zh = multiple ? alto : alto * 3 / 4;
+    t->zw = completo ? ancho : ancho * 3 / 4;
+    t->zh = completo ? alto : alto * 3 / 4;
     t->zx = (ancho - t->zw) / 2;
     t->zy = (alto - t->zh) / 2;
-    t->rw = multiple ? t->zw : ancho * 6 / 10;
-    t->rh = multiple ? t->zh : alto * 6 / 10;
+    t->rw = completo ? t->zw : ancho * 6 / 10;
+    t->rh = completo ? t->zh : alto * 6 / 10;
     t->rx = (ancho - t->rw) / 2;
     t->ry = (alto - t->rh) / 2;
 
@@ -326,7 +336,7 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     t->hacer(ML_PASO_RAPIDO);
 
     const int n = (int)dificiles.size();
-    if (t->lector.listo()) {
+    if (t->lector.listo() || (modo & ML_MODO_SOLO_RAPIDO)) {
       info->siguiente_ronda = ronda + 1;
     } else if (hilos > 1) {
       // En paralelo: todos los pasos dificiles a la vez, repartidos en los

@@ -42,6 +42,11 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   /// sea de "uno" (al mantener presionado el boton se leen todos a la vez).
   bool buscarTodos = false;
 
+  /// Con el boton presionado (o en conteo multiple): todos los pasos del
+  /// motor. Sin disparar solo el rapido, para mostrar los recuadros sin
+  /// gastar procesador ni bateria.
+  bool esfuerzo = false;
+
   /// Tope de tiempo por cuadro, solo si el motor corre uno tras otro (en
   /// paralelo prueba todo en cada cuadro).
   static const presupuestoUs = 45000;
@@ -225,7 +230,9 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
         bytesPorFila: plano.bytesPerRow,
         formatoPixel: Platform.isAndroid ? FormatoPixel.luma : FormatoPixel.bgra,
         formatos: grupo.mascaraMotor,
-        multiple: multiple || buscarTodos,
+        modo: (multiple ? ModoMotor.todos | ModoMotor.cuadroCompleto : 0) |
+            (buscarTodos ? ModoMotor.todos : 0) |
+            (esfuerzo || multiple ? 0 : ModoMotor.soloRapido),
         presupuestoUs: presupuestoUs,
         ronda: _ronda,
       );
@@ -264,9 +271,12 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     ];
 
     _linternaAutomatica(r.info);
+    final confirmados = _fusion.confirmar(codigos);
+    for (final d in _fusion.retenidos) {
+      registrar('DUDOSO', '${d.valor} ${d.formato} paso=${d.detalle} (se cuenta si se repite en el cuadro siguiente)');
+    }
     if (!_capturas.isClosed && _encendida) {
-      _capturas.add(Captura(tamVertical(sensor, giro), _fusion.confirmar(codigos),
-          info: r.info, ilegible: r.info.ilegibles > 0));
+      _capturas.add(Captura(tamVertical(sensor, giro), confirmados, info: r.info, ilegible: r.info.ilegibles > 0));
     }
   }
 
@@ -308,7 +318,9 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+    // Solo al ir a segundo plano: "inactive" llega tambien con el dialogo del
+    // permiso de camara, y apagar ahi la reiniciaba al arrancar.
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
       if (_encendida) {
         _apagadaPorSegundoPlano = true;
         unawaited(apagar());

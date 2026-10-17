@@ -38,6 +38,18 @@ abstract final class FormatosMotor {
   static const microQr = 1 << 14;
 }
 
+/// Modo de lectura (ML_MODO_* en motor_lector.h), se combinan con |.
+abstract final class ModoMotor {
+  /// Todos los codigos del cuadro (si no, corta con el primero).
+  static const todos = 1;
+
+  /// Todo el cuadro (si no, la zona central).
+  static const cuadroCompleto = 2;
+
+  /// Solo el paso rapido (camara sin disparar: ahorra bateria).
+  static const soloRapido = 4;
+}
+
 /// Paso del motor que logro la lectura (ML_PASO_*).
 enum PasoMotor {
   ninguno('-'),
@@ -236,7 +248,7 @@ ResultadoMotor leerCuadro(
   required int bytesPorFila,
   FormatoPixel formatoPixel = FormatoPixel.luma,
   int formatos = 0,
-  bool multiple = false,
+  int modo = 0,
   int presupuestoUs = 0,
   int ronda = 0,
   String? biblioteca,
@@ -249,7 +261,7 @@ ResultadoMotor leerCuadro(
   final destino = m.pixeles(largo);
   destino.asTypedList(largo).setRange(0, largo, pixeles);
 
-  final n = m.leer(destino, ancho, alto, bytesPorFila, formatoPixel.index, formatos, multiple ? 1 : 0,
+  final n = m.leer(destino, ancho, alto, bytesPorFila, formatoPixel.index, formatos, modo,
       presupuestoUs, ronda, m.salida, _maxSalida, m.info);
 
   final codigos = <CodigoMotor>[
@@ -292,14 +304,14 @@ ResultadoMotor leerCuadro(
 
 class _Pedido {
   _Pedido(this.id, this.pixeles, this.ancho, this.alto, this.bytesPorFila, this.formatoPixel, this.formatos,
-      this.multiple, this.presupuestoUs, this.ronda);
+      this.modo, this.presupuestoUs, this.ronda);
 
   final int id;
   final TransferableTypedData pixeles;
   final int ancho, alto, bytesPorFila;
   final FormatoPixel formatoPixel;
   final int formatos;
-  final bool multiple;
+  final int modo;
   final int presupuestoUs;
   final int ronda;
 }
@@ -342,7 +354,7 @@ class MotorLector {
     required int bytesPorFila,
     FormatoPixel formatoPixel = FormatoPixel.luma,
     int formatos = 0,
-    bool multiple = false,
+    int modo = 0,
     int presupuestoUs = 0,
     int ronda = 0,
   }) {
@@ -352,7 +364,7 @@ class MotorLector {
     final largo = bytesPorFila * alto;
     final vista = pixeles.length > largo ? Uint8List.sublistView(pixeles, 0, largo) : pixeles;
     _envio.send(_Pedido(id, TransferableTypedData.fromList([vista]), ancho, alto, bytesPorFila, formatoPixel,
-        formatos, multiple, presupuestoUs, ronda));
+        formatos, modo, presupuestoUs, ronda));
     return c.future;
   }
 
@@ -378,7 +390,7 @@ class MotorLector {
           bytesPorFila: p.bytesPorFila,
           formatoPixel: p.formatoPixel,
           formatos: p.formatos,
-          multiple: p.multiple,
+          modo: p.modo,
           presupuestoUs: p.presupuestoUs,
           ronda: p.ronda,
         );

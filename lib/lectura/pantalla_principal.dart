@@ -125,6 +125,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
       _error = false;
     });
     _leyoEnDisparo = false;
+    _camara.esfuerzo = true; // todos los pasos del motor mientras se busca
     _desdeToque
       ..reset()
       ..start();
@@ -181,6 +182,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
   void _desarmar() {
     _finToque?.cancel();
     _camara.buscarTodos = false;
+    _camara.esfuerzo = false;
     if (!mounted) return;
     setState(() {
       _armado = false;

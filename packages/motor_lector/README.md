@@ -37,9 +37,13 @@ cmake -S src -B /tmp/motor -DCMAKE_BUILD_TYPE=Release && cmake --build /tmp/moto
 MOTOR_LECTOR_SO=/tmp/motor/libmotor_lector.so flutter test
 ```
 
-Resultado del banco (PC de 4 nucleos): zxing solo 17/40, motor 36/40; tiempo
-total hasta leer los 36: 1090 ms uno tras otro, 503 ms en paralelo (todos en
-el primer cuadro). `BANCO_HILOS=1` para medir uno tras otro.
+Lecturas falsas: en el telefono, pasos sobre imagen preparada devolvieron
+EAN-13 equivocados que igual pasaban el digito verificador. Esos pasos exigen
+3 lineas de barrido iguales (`minLineCount`) y la app pide verlos en 2
+cuadros; el banco cuenta las lecturas falsas y falla si hay alguna.
+
+Resultado del banco (PC de 4 nucleos): zxing solo 17/40, motor 35/40, 0
+lecturas falsas. `BANCO_HILOS=1` para medir uno tras otro.
 No leidos: 1D con ~2 px por barra y desenfocados (acercarse o zoom) y un
 Code 128 largo sobre una botella muy curva (girar la botella).
 

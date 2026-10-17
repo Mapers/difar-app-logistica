@@ -4,8 +4,8 @@ import 'package:difar_logistica/core/codigos.dart';
 import 'package:difar_logistica/lectura/fusion.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-CodigoVisto codigo(String valor, Simbologia s, String fuente) =>
-    CodigoVisto(valor, s.nombre, const [Offset(0, 0)], simbologia: s, fuente: fuente);
+CodigoVisto codigo(String valor, Simbologia s, String fuente, {String paso = 'rapido'}) =>
+    CodigoVisto(valor, s.nombre, const [Offset(0, 0)], simbologia: s, fuente: fuente, detalle: paso);
 
 void main() {
   test('un EAN se acepta al primer cuadro', () {
@@ -27,6 +27,15 @@ void main() {
       f.confirmar([]);
     }
     expect(f.confirmar([codigo('177501', Simbologia.itf, 'C++')]), isEmpty);
+  });
+
+  test('EAN leido sobre imagen preparada espera a repetirse; una lectura falsa suelta no entra', () {
+    final f = Fusion();
+    expect(f.confirmar([codigo('1551130053606', Simbologia.ean13, 'C++', paso: 'ampliado')]), isEmpty);
+    expect(f.confirmar([codigo('1111130013606', Simbologia.ean13, 'C++', paso: 'reflejos/sombras')]), isEmpty);
+    // El real se repite en el cuadro siguiente: entra.
+    expect(f.confirmar([codigo('1551130053606', Simbologia.ean13, 'C++', paso: 'poca luz')]).single.valor,
+        '1551130053606');
   });
 
   test('varios codigos del mismo cuadro salen juntos', () {

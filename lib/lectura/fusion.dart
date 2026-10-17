@@ -50,24 +50,41 @@ Offset aVertical(Offset p, Size sensor, int giro) => switch (giro % 360) {
       _ => p,
     };
 
-/// Filtra lecturas dudosas: los formatos sin digito de control (ITF, Code
-/// 39/93, Codabar) se aceptan solo si se vieron igual en uno de los 2 cuadros
-/// anteriores (un pedazo de codigo no se repite igual).
+/// Filtra lecturas dudosas, que se aceptan solo si se vieron igual en uno de
+/// los 2 cuadros anteriores (un error no se repite igual):
+/// * formatos sin digito de control (ITF, Code 39/93, Codabar): un pedazo
+///   del codigo tambien "decodifica";
+/// * lo leido sobre imagen preparada (contraste, normalizacion, ampliacion,
+///   giro): en el telefono salieron lecturas falsas que pasaban el digito
+///   verificador del EAN-13 (1111130013606, 1551130053606... de un mismo
+///   codigo). Lo leido sobre la imagen original entra al instante.
 class Fusion {
+  /// Pasos que leen la imagen original, sin prepararla (PasoMotor.nombre).
+  static const _pasosDirectos = {'rapido', 'completo', 'invertido', ''};
+
   int _cuadro = 0;
   final _visto = <String, int>{};
+
+  /// Los retenidos en el ultimo cuadro (para el registro).
+  List<CodigoVisto> retenidos = const [];
 
   List<CodigoVisto> confirmar(List<CodigoVisto> codigos) {
     _cuadro++;
     final aceptados = <CodigoVisto>[];
+    final dudosos = <CodigoVisto>[];
     final yaEnCuadro = <String>{};
     for (final c in codigos) {
       if (!yaEnCuadro.add(c.valor)) continue;
       final anterior = _visto[c.valor];
       _visto[c.valor] = _cuadro;
-      final dudoso = c.simbologia?.sinControl ?? false;
-      if (!dudoso || (anterior != null && _cuadro - anterior <= 2)) aceptados.add(c);
+      final dudoso = (c.simbologia?.sinControl ?? false) || !_pasosDirectos.contains(c.detalle);
+      if (!dudoso || (anterior != null && _cuadro - anterior <= 2)) {
+        aceptados.add(c);
+      } else {
+        dudosos.add(c);
+      }
     }
+    retenidos = dudosos;
     if (_visto.length > 500) _visto.removeWhere((_, cuadro) => _cuadro - cuadro > 2);
     return aceptados;
   }
