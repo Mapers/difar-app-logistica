@@ -48,3 +48,22 @@ No leidos: 1D con ~2 px por barra y desenfocados (acercarse o zoom) y un
 Code 128 largo sobre una botella muy curva (girar la botella).
 
 iOS: `ios/Classes` enlaza a las mismas fuentes; sin compilar todavia (falta Mac).
+
+## Validacion de OpenCV (detector de codigos 1D)
+
+`src/detector.cpp`: `cv::barcode::BarcodeDetector` ubica cada codigo 1D del
+cuadro con su angulo; cada uno se recorta, se endereza y se decodifica con
+zxing por separado, en paralelo. Solo se compila con `-DML_OPENCV_DIR=...`
+(define `ML_CON_OPENCV`); sin eso el motor queda como antes.
+
+Banco en PC (4 nucleos), mismas imagenes con y sin detector:
+
+| Escena | Sin OpenCV | Con OpenCV |
+|---|---|---|
+| 20 codigos EAN-13 en un cuadro 1920x1080 (girados +-10 grados) | 17/20 tras 10 cuadros (1531 ms) | **20/20 en el 1er cuadro (53 ms)** |
+| 40 escenas dificiles (un codigo) | 35/40, 816 ms en total | 36/40, 816 ms en total |
+| Texto y rayas sin codigos (20 cuadros) | 0 lecturas falsas | 0 lecturas falsas |
+
+Peso del motor para Android arm64: 1,3 MB sin OpenCV; 9,6 MB con el SDK
+oficial (arrastra dnn y protobuf); **4,9 MB con OpenCV compilado solo con
+core, imgproc y objdetect** (sin dnn, sin codecs de imagen): +3,6 MB al APK.

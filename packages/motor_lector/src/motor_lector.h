@@ -52,7 +52,9 @@ extern "C" {
 #define ML_PASO_AMPLIADO 5   // zona central ampliada 2x + enfoque (chico/borroso)
 #define ML_PASO_INVERTIDO 6  // negativo (impresion clara sobre fondo oscuro, 1D)
 #define ML_PASO_ROTADO 7     // girado 45 grados (1D en angulo)
-#define ML_PASOS 8
+#define ML_PASO_DETECTOR 8   // OpenCV ubico el codigo; recorte enderezado, sin preparar
+#define ML_PASO_DETECTOR_PREP 9 // idem, recorte con contraste ecualizado
+#define ML_PASOS 10
 
 typedef struct {
   int32_t formato;      // uno de ML_* (0 si no esta en la lista)
@@ -76,11 +78,16 @@ typedef struct {
   int32_t nitidez;         // promedio del |laplaciano| del centro: bajo = desenfocado o movido
   int32_t ilegibles;       // simbolos encontrados que fallaron la verificacion (codigo danado)
   int32_t hilos;           // hilos usados en los pasos dificiles
+  int32_t regiones;        // codigos 1D que ubico el detector de OpenCV (-1 = apagado)
 } ml_info;
 
 // Hilos para los pasos dificiles: 0 = segun los nucleos (por defecto, en
 // paralelo), 1 = uno tras otro repartidos entre cuadros con [ronda].
 FFI_PLUGIN_EXPORT void ml_configurar(int32_t hilos);
+
+// Detector de OpenCV (ubica cada codigo 1D, lo recorta y endereza): 1 = si,
+// 0 = no. Solo si la biblioteca se compilo con OpenCV (ML_CON_OPENCV).
+FFI_PLUGIN_EXPORT void ml_configurar_detector(int32_t activo);
 
 // Lee los codigos de un cuadro. Devuelve cuantos escribio en [salida].
 // [modo]: ML_MODO_* combinados. Con ML_MODO_TODOS junta lo que lea cada

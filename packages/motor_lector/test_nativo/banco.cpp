@@ -12,7 +12,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <functional>
+#include <set>
 #include <random>
 #include <string>
 #include <vector>
@@ -195,6 +197,9 @@ int main() {
   double tiempoTotal = 0; // suma, en los leidos, del tiempo de todos los cuadros hasta leer
   const int hilos = std::getenv("BANCO_HILOS") ? std::atoi(std::getenv("BANCO_HILOS")) : 0;
   ml_configurar(hilos);
+  const int detector = std::getenv("BANCO_DETECTOR") ? std::atoi(std::getenv("BANCO_DETECTOR")) : 1;
+  ml_configurar_detector(detector);
+  std::printf("detector OpenCV: %s\n", detector ? "si" : "no");
   std::printf("hilos: %s   tope por cuadro (solo uno tras otro): %.1f ms\n",
               hilos == 0 ? "segun nucleos (paralelo)" : std::to_string(hilos).c_str(), presupuesto / 1000.0);
   std::printf("%-17s %-11s %-6s %-6s %-5s %-7s %s\n", "escena", "codigo", "zxing", "motor", "paso", "cuadros",
@@ -260,6 +265,111 @@ int main() {
     }
   }
   const int total = (int)(escenas.size() * codigos.size());
+
+  // --- Muchos codigos a la vez: 20 EAN-13 en un cuadro 1920x1080, cada uno
+  // girado un poco distinto (cajas en un pallet). Como el conteo multiple.
+  {
+    constexpr int GW = 1920, GH = 1080;
+    std::vector<float> img(GW * GH);
+    std::mt19937 rng(11);
+    std::normal_distribution<float> ruido(0, 5);
+    for (int i = 0; i < GW * GH; i++) img[i] = 110 + ruido(rng);
+    std::vector<std::string> esperados;
+    for (int k = 0; k < 20; k++) {
+      std::string base = "77501820" + std::to_string(1000 + k * 37);
+      base = base.substr(0, 12);
+      int suma = 0;
+      for (int i = 0; i < 12; i++) suma += (base[i] - '0') * (i % 2 ? 3 : 1);
+      esperados.push_back(base + char('0' + (10 - suma % 10) % 10));
+      auto bits = MultiFormatWriter(BarcodeFormat::EAN13).setMargin(0).encode(base, 200, 90);
+      const int cx = 200 + (k % 5) * 380, cy = 150 + (k / 5) * 260;
+      const float ang = ((k * 7) % 21 - 10) * 3.14159f / 180; // -10..10 grados
+      const float co = std::cos(ang), si = std::sin(ang);
+      const int bw = bits.width(), bh = bits.height();
+      for (int y = -bh / 2 - 25; y < bh / 2 + 25; y++)
+        for (int x = -bw / 2 - 30; x < bw / 2 + 30; x++) {
+          const int X = (int)(cx + co * x - si * y), Y = (int)(cy + si * x + co * y);
+          if (X < 0 || Y < 0 || X >= GW || Y >= GH) continue;
+          const int bx = x + bw / 2, by = y + bh / 2;
+          const bool negro = bx >= 0 && by >= 0 && bx < bw && by < bh && bits.get(bx, by);
+          img[Y * GW + X] = (negro ? 20 : 235) + ruido(rng);
+        }
+    }
+    std::vector<uint8_t> b(GW * GH);
+    for (int i = 0; i < GW * GH; i++) b[i] = (uint8_t)std::clamp(img[i], 0.0f, 255.0f);
+    if (std::getenv("BANCO_PGM")) {
+      const std::string ruta = std::string(std::getenv("BANCO_PGM")) + "/veinte.pgm";
+      if (FILE* f = std::fopen(ruta.c_str(), "wb")) {
+        std::fprintf(f, "P5 %d %d 255\n", GW, GH);
+        std::fwrite(b.data(), 1, b.size(), f);
+        std::fclose(f);
+      }
+    }
+    std::vector<ml_codigo> sal(64);
+    ml_info info;
+    std::set<std::string> leidos;
+    int cuadros = 0, ms = 0, falsosV = 0;
+    for (; cuadros < 10 && (int)leidos.size() < 20; cuadros++) {
+      const int n = ml_leer(b.data(), GW, GH, GW, ML_PIXEL_LUMA, 0, ML_MODO_TODOS | ML_MODO_CUADRO_COMPLETO, 0, cuadros,
+                            sal.data(), 64, &info);
+      ms += info.microsegundos / 1000;
+      for (int k = 0; k < n; k++) {
+        if (std::find(esperados.begin(), esperados.end(), sal[k].texto) == esperados.end()) {
+          std::printf("  LECTURA FALSA (20 codigos): '%s' paso %d\n", sal[k].texto, sal[k].paso);
+          falsosV++;
+        } else {
+          leidos.insert(sal[k].texto);
+        }
+      }
+      std::string tiempos;
+      for (int p = 1; p < ML_PASOS; p++)
+        if (info.tiempo_paso_us[p]) tiempos += " " + std::to_string(p) + ":" + std::to_string(info.tiempo_paso_us[p] / 1000);
+      std::printf("  20 codigos, cuadro %d: %zu leidos, %d ms, detector ubico %d [%s ]\n", cuadros + 1, leidos.size(),
+                  info.microsegundos / 1000, info.regiones, tiempos.c_str());
+    }
+    std::printf("20 CODIGOS: %zu/20 en %d cuadros, %d ms en total, falsos %d\n", leidos.size(), cuadros, ms, falsosV);
+    falsos += falsosV;
+  }
+
+  // --- Sin codigos: texto impreso y rayas (carton corrugado, rejillas). Toda
+  // lectura es falsa. Con esfuerzo (boton presionado), 20 cuadros.
+  {
+    std::vector<float> img(W * H, 200);
+    std::mt19937 rng(5);
+    std::uniform_int_distribution<int> u(0, 1000);
+    // "Texto": renglones de palabras hechas de trazos verticales de ancho variable.
+    for (int renglon = 0; renglon < 14; renglon++) {
+      const int y0 = 30 + renglon * 48;
+      for (int x = 20; x < W / 2;) {
+        const int palabra = 20 + u(rng) % 80;
+        for (int p = 0; p < palabra; p += 2 + u(rng) % 5)
+          for (int y = y0; y < y0 + 18 + u(rng) % 6; y++)
+            for (int t = 0; t < 1 + u(rng) % 3; t++)
+              if (x + p + t < W) img[y * W + x + p + t] = 30;
+        x += palabra + 12;
+      }
+    }
+    // Rayas regulares y casi regulares (corrugado, rejilla, tela).
+    for (int y = 0; y < H; y++)
+      for (int x = W / 2; x < W; x++) {
+        const float periodo = 6 + 4 * std::sin(y * 0.01f);
+        img[y * W + x] = 128 + 100 * std::sin(x * 6.2832f / periodo) + (u(rng) % 20);
+      }
+    const auto b = aBytes(img);
+    ml_codigo sal[8];
+    ml_info info;
+    int falsosT = 0;
+    for (int c = 0; c < 20; c++) {
+      const int n = ml_leer(b.data(), W, H, W, ML_PIXEL_LUMA, 0, ML_MODO_TODOS, 0, c, sal, 8, &info);
+      for (int k = 0; k < n; k++) {
+        std::printf("  LECTURA FALSA (texto/rayas): '%s' %s paso %d\n", sal[k].texto, sal[k].nombre_formato, sal[k].paso);
+        falsosT++;
+      }
+    }
+    std::printf("TEXTO Y RAYAS (sin codigos): %d lecturas falsas en 20 cuadros\n", falsosT);
+    falsos += falsosT;
+  }
+
   std::printf("\nzxing solo: %d/%d   motor: %d/%d   cuadro mas lento: %.1f ms   tiempo total hasta leer: %.0f ms\n",
               totalBase, total, totalMotor, total, peorCuadro / 1000.0, tiempoTotal / 1000.0);
   std::printf("lecturas falsas: %d\n", falsos);

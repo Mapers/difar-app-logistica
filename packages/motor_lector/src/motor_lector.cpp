@@ -1,5 +1,8 @@
 #include "motor_lector.h"
 #include "preparar.h"
+#ifdef ML_CON_OPENCV
+#include "detector.h"
+#endif
 
 #include "ReadBarcode.h"
 
@@ -24,6 +27,8 @@ using Reloj = std::chrono::steady_clock;
 // Hilos para los pasos dificiles (ml_configurar). <= 1: uno tras otro,
 // repartidos entre cuadros con [ronda].
 std::atomic<int> gHilos{0}; // 0 = segun los nucleos del telefono
+
+std::atomic<bool> gDetector{true};
 
 int hilosEnUso() {
   const int h = gHilos.load();
@@ -120,9 +125,11 @@ struct Lector {
 
   // [errores]: tambien devuelve simbolos encontrados que fallan la
   // verificacion (se cuentan como ilegibles: hay codigo pero esta danado).
-  void leer(const ImageView& img, ReaderOptions o, int paso, Afin t = {}, bool invertido = false,
-            bool errores = false) {
-    if (listo()) return;
+  // Devuelve cuantos codigos nuevos agrego.
+  int leer(const ImageView& img, ReaderOptions o, int paso, Afin t = {}, bool invertido = false,
+           bool errores = false) {
+    if (listo()) return 0;
+    int nuevos = 0;
     o.setReturnErrors(errores);
     auto encontrados = ReadBarcodes(img, o);
     std::lock_guard<std::mutex> l(cerrojo);
@@ -139,8 +146,9 @@ struct Lector {
         leidos.push_back({std::move(b), paso, t, invertido});
         hayUno = true;
         cuantos++;
+        nuevos++;
       }
-    }
+    }    return nuevos;
   }
 
   bool listo() const { return !multiple && hayUno.load(); }
@@ -180,10 +188,14 @@ struct Trabajo {
   Afin enZona() const { return Afin::desplazar((float)zx, (float)zy); }
   Afin enAjustada() const { return Afin::desplazar((float)rx, (float)ry); }
 
+  bool conDetector = false;
+
   void rapido() {
     // Sobre la imagen original y con mas lineas de barrido (tryHarder): lo
     // normal se lee aca, sin preparar nada. Sin invertido (tiene su paso).
-    auto o = lector.opciones(true);
+    // Buscando todos con el detector, los 1D los ubica OpenCV: aca basta un
+    // barrido liviano (sobre todo para los 2D).
+    auto o = lector.opciones(!(lector.multiple && conDetector));
     o.setTryInvert(false);
     lector.leer(entrada().cropped(zx, zy, zw, zh), o, ML_PASO_RAPIDO, enZona(), false, true);
   }
@@ -237,6 +249,41 @@ struct Trabajo {
     }
   }
 
+  std::atomic<int> regiones{-1};
+
+  // OpenCV ubica cada codigo 1D; cada uno se recorta, se endereza y se
+  // decodifica por separado, en paralelo. Lee cualquier angulo y el costo
+  // crece por codigo, no por tamano del cuadro. Solo se decodifica donde
+  // hay un codigo (menos lecturas falsas sobre texto o rayas).
+  void detector() {
+#ifdef ML_CON_OPENCV
+    const auto qs = det::detectar(zona(), zw, zh, fila);
+    regiones = (int)qs.size();
+    if (qs.empty()) return;
+    std::atomic<int> siguiente{0};
+    auto trabajar = [&] {
+      for (int k; (k = siguiente++) < (int)qs.size();) {
+        if (lector.listo()) return;
+        auto rec = det::enderezar(zona(), zw, zh, fila, qs[k]);
+        const Afin a{rec.a, rec.b, rec.c, rec.d, rec.tx + zx, rec.ty + zy};
+        auto o = lector.opciones(false);
+        o.setMaxNumberOfSymbols(1);
+        if (lector.leer(rec.img.vista(), o, ML_PASO_DETECTOR, a) > 0) continue;
+        auto eq = det::clahe(rec.img);
+        auto o2 = lector.opciones(true, true);
+        o2.setMaxNumberOfSymbols(1);
+        if (lector.leer(eq.vista(), o2, ML_PASO_DETECTOR_PREP, a) > 0) continue;
+        lector.leer(prep::invertir(eq.px.data(), eq.ancho, eq.alto, eq.ancho).vista(), o2, ML_PASO_DETECTOR_PREP, a, true);
+      }
+    };
+    const int n = std::min((int)qs.size(), std::max(1, hilosEnUso()));
+    std::vector<std::thread> grupo;
+    for (int h = 1; h < n; h++) grupo.emplace_back(trabajar);
+    trabajar();
+    for (auto& g : grupo) g.join();
+#endif
+  }
+
   void hacer(int paso) {
     if (lector.listo()) return;
     const int antes = usado();
@@ -248,6 +295,7 @@ struct Trabajo {
     case ML_PASO_POCA_LUZ: pocaLuz(); break;
     case ML_PASO_COMPLETO: completo(); break;
     case ML_PASO_AMPLIADO: ampliado(); break;
+    case ML_PASO_DETECTOR: detector(); break;
     }
     tiempos[paso] = std::max(1, usado() - antes);
     pasosHechos++;
@@ -268,6 +316,8 @@ void copiarTexto(char* destino, size_t capacidad, const std::string& texto) {
 } // namespace
 
 extern "C" void ml_configurar(int32_t hilos) { gHilos = std::max(0, (int)hilos); }
+
+extern "C" void ml_configurar_detector(int32_t activo) { gDetector = activo != 0; }
 
 extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, int32_t bytes_por_fila,
                            int32_t formato_pixel, int32_t formatos, int32_t modo, int32_t presupuesto_us,
@@ -309,6 +359,7 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     info->nitidez = t->est.nitidez;
     info->sugerir_linterna = t->est.brillo < 60 ? 1 : 0;
     info->hilos = hilos;
+    info->regiones = -1;
 
     t->lector.formatos = aFormatosZx(formatos);
     t->lector.multiple = (modo & ML_MODO_TODOS) != 0;
@@ -332,10 +383,24 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
       auto it = std::find(dificiles.begin(), dificiles.end(), paso);
       if (it != dificiles.end()) std::rotate(dificiles.begin(), it, it + 1);
     };
+    if (gDetector.load() && !t->lector.multiple) {
+#ifdef ML_CON_OPENCV
+      dificiles.insert(dificiles.begin(), ML_PASO_DETECTOR);
+#endif
+    }
     if (t->est.brillo < 70) adelantar(ML_PASO_POCA_LUZ);
     if (t->est.quemados >= 3 || t->est.contraste < 30 || t->est.brillo < 70) adelantar(ML_PASO_REFLEJOS);
 
+#ifdef ML_CON_OPENCV
+    const bool conDetector = gDetector.load();
+#else
+    const bool conDetector = false;
+#endif
+    t->conDetector = conDetector;
     t->hacer(ML_PASO_RAPIDO);
+    // Buscando todos, el detector va siempre (es lo que encuentra varios a la
+    // vez); buscando uno, es un paso dificil mas (el primero de la lista).
+    if (conDetector && t->lector.multiple && !(modo & ML_MODO_SOLO_RAPIDO)) t->hacer(ML_PASO_DETECTOR);
     const int delRapido = t->lector.cuantos.load();
 
     const int n = (int)dificiles.size();
@@ -343,7 +408,9 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     // pasos dificiles corren 1 de cada 3 cuadros igual, por si al lado de los
     // faciles hay uno dificil. (En el telefono, esperar a todos los pasos con
     // el codigo ya leido dejaba cuadros de 350-650 ms.)
-    const bool rapidoAlcanza = t->lector.multiple && delRapido > 0 && ronda % 3 != 0;
+    // Con el detector: si leyo todo lo que ubico, no hace falta mas.
+    const bool detectorCompleto = conDetector && t->regiones.load() > 0 && delRapido >= t->regiones.load();
+    const bool rapidoAlcanza = t->lector.multiple && delRapido > 0 && (ronda % 3 != 0 || detectorCompleto);
     if (t->lector.listo() || rapidoAlcanza || (modo & ML_MODO_SOLO_RAPIDO)) {
       info->siguiente_ronda = ronda + 1;
     } else if (hilos > 1) {
@@ -365,7 +432,14 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
       std::unique_lock<std::mutex> l(t->espera);
       // Vuelve apenas algun paso lee algo nuevo; los demas terminan solos y se
       // descartan (el proximo cuadro vuelve a probar todo).
-      t->aviso.wait(l, [&] { return t->trabajando == 0 || t->lector.cuantos.load() > delRapido; });
+      auto hayNuevo = [&] { return t->trabajando == 0 || t->lector.cuantos.load() > delRapido; };
+      if (t->lector.multiple && delRapido > 0) {
+        // Buscando todos y con algo ya leido: se espera poco a los dificiles
+        // (lo que lean despues se descarta; el proximo cuadro vuelve a probar).
+        t->aviso.wait_for(l, std::chrono::milliseconds(120), hayNuevo);
+      } else {
+        t->aviso.wait(l, hayNuevo);
+      }
       info->siguiente_ronda = ronda + 1;
     } else {
       // Uno tras otro, con tope de tiempo; el siguiente cuadro sigue donde quedo.
@@ -381,6 +455,7 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     for (int p = 0; p < ML_PASOS; p++) info->tiempo_paso_us[p] = t->tiempos[p].load();
     info->pasos = t->pasosHechos.load();
     info->ilegibles = t->lector.ilegibles.load();
+    info->regiones = t->regiones.load();
 
     // Copia de lo leido bajo el cerrojo: puede haber hilos todavia agregando.
     std::vector<Lectura> leidos;

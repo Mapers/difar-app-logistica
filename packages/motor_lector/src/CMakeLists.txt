@@ -22,6 +22,18 @@ add_library(motor_lector SHARED
   "preparar.cpp"
 )
 target_link_libraries(motor_lector PRIVATE ZXing::ZXing)
+
+# Detector de OpenCV (ubica codigos 1D). Con -DML_OPENCV_DIR=<carpeta con
+# OpenCVConfig.cmake> se enlaza estatico, solo los modulos necesarios.
+if (ML_OPENCV_DIR)
+  set(OpenCV_STATIC ON)
+  set(OpenCV_DIR ${ML_OPENCV_DIR})
+  find_package(OpenCV REQUIRED COMPONENTS core imgproc objdetect)
+  target_sources(motor_lector PRIVATE "detector.cpp")
+  target_compile_definitions(motor_lector PRIVATE ML_CON_OPENCV)
+  target_include_directories(motor_lector PRIVATE ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(motor_lector PRIVATE ${OpenCV_LIBS})
+endif()
 # Siempre optimizado: en Debug el motor seria 5-10x mas lento.
 target_compile_options(motor_lector PRIVATE -O3)
 target_compile_options(ZXing PRIVATE -O3)
@@ -38,4 +50,7 @@ if (ANDROID)
   target_link_options(motor_lector PRIVATE "-Wl,-z,max-page-size=16384")
   # Biblioteca estandar de C++ dentro del .so (no hay otra en la app).
   target_link_options(motor_lector PRIVATE "-static-libstdc++")
+  # Solo lo que se usa de zxing y OpenCV termina en el .so.
+  target_compile_options(motor_lector PRIVATE -ffunction-sections -fdata-sections)
+  target_link_options(motor_lector PRIVATE "-Wl,--gc-sections" "-Wl,--exclude-libs,ALL" "-s")
 endif()
