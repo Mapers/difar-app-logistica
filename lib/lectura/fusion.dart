@@ -12,7 +12,7 @@ class CodigoVisto {
   final List<Offset> esquinas;
   final Simbologia? simbologia;
 
-  /// Que motor lo leyo: "C++", "ML Kit" o "C++ + ML Kit".
+  /// Que motor lo leyo (hoy siempre el propio, "C++").
   final String fuente;
 
   /// Paso del motor C++ que lo logro (para el registro).
@@ -50,40 +50,23 @@ Offset aVertical(Offset p, Size sensor, int giro) => switch (giro % 360) {
       _ => p,
     };
 
-/// Junta lo que leyeron los dos motores en un cuadro y filtra lecturas
-/// dudosas: los formatos sin digito de control (ITF, Code 39/93, Codabar) se
-/// aceptan si los leyeron ambos motores en el mismo cuadro o si se vieron
-/// igual en uno de los 2 cuadros anteriores.
+/// Filtra lecturas dudosas: los formatos sin digito de control (ITF, Code
+/// 39/93, Codabar) se aceptan solo si se vieron igual en uno de los 2 cuadros
+/// anteriores (un pedazo de codigo no se repite igual).
 class Fusion {
   int _cuadro = 0;
   final _visto = <String, int>{};
 
-  List<CodigoVisto> fusionar(List<CodigoVisto> cpp, List<CodigoVisto> mlkit) {
+  List<CodigoVisto> confirmar(List<CodigoVisto> codigos) {
     _cuadro++;
-    final porValor = <String, CodigoVisto>{};
-    final enAmbos = <String>{};
-    for (final c in cpp) {
-      porValor.putIfAbsent(c.valor, () => c);
-    }
-    for (final c in mlkit) {
-      final previo = porValor[c.valor];
-      if (previo == null) {
-        porValor[c.valor] = c;
-      } else if (previo.fuente != c.fuente) {
-        enAmbos.add(c.valor);
-        porValor[c.valor] = CodigoVisto(previo.valor, previo.formato, previo.esquinas,
-            simbologia: previo.simbologia ?? c.simbologia, fuente: 'C++ + ML Kit', detalle: previo.detalle);
-      }
-    }
-
     final aceptados = <CodigoVisto>[];
-    for (final c in porValor.values) {
+    final yaEnCuadro = <String>{};
+    for (final c in codigos) {
+      if (!yaEnCuadro.add(c.valor)) continue;
       final anterior = _visto[c.valor];
       _visto[c.valor] = _cuadro;
       final dudoso = c.simbologia?.sinControl ?? false;
-      if (!dudoso || enAmbos.contains(c.valor) || (anterior != null && _cuadro - anterior <= 2)) {
-        aceptados.add(c);
-      }
+      if (!dudoso || (anterior != null && _cuadro - anterior <= 2)) aceptados.add(c);
     }
     if (_visto.length > 500) _visto.removeWhere((_, cuadro) => _cuadro - cuadro > 2);
     return aceptados;

@@ -62,4 +62,12 @@ void main() {
       expect(indiceApuntado(const [], imagen, vista), isNull);
     });
   });
+
+  test('codigos visibles: los que tienen el centro dentro de la vista', () {
+    List<Offset> caja(double cx, double cy) =>
+        [Offset(cx - 10, cy - 5), Offset(cx + 10, cy - 5), Offset(cx + 10, cy + 5), Offset(cx - 10, cy + 5)];
+    const imagen = Size(720, 1280);
+    const vista = Size(200, 200); // ve y de 280 a 1000 de la imagen
+    expect(indicesVisibles([caja(360, 500), caja(360, 100), caja(380, 900)], imagen, vista), [0, 2]);
+  });
 }

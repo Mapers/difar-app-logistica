@@ -88,6 +88,8 @@ class InfoMotor {
     this.microsegundos = 0,
     this.tiempoPorPaso = const {},
     this.nitidez = 0,
+    this.ilegibles = 0,
+    this.hilos = 0,
   });
 
   /// 0..255, promedio del centro del cuadro.
@@ -106,6 +108,12 @@ class InfoMotor {
 
   /// Promedio del |laplaciano| del centro: bajo = desenfocado o movido.
   final int nitidez;
+
+  /// Simbolos encontrados que fallaron la verificacion (codigo danado).
+  final int ilegibles;
+
+  /// Hilos usados en los pasos dificiles (1 = uno tras otro).
+  final int hilos;
 }
 
 class ResultadoMotor {
@@ -156,10 +164,17 @@ final class _MlInfo extends Struct {
   external Array<Int32> tiempoPasoUs;
   @Int32()
   external int nitidez;
+  @Int32()
+  external int ilegibles;
+  @Int32()
+  external int hilos;
 }
 
 typedef _LeerC = Int32 Function(Pointer<Uint8>, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32,
     Pointer<_MlCodigo>, Int32, Pointer<_MlInfo>);
+typedef _ConfigurarC = Void Function(Int32);
+typedef _ConfigurarDart = void Function(int);
+
 typedef _LeerDart = int Function(
     Pointer<Uint8>, int, int, int, int, int, int, int, int, Pointer<_MlCodigo>, int, Pointer<_MlInfo>);
 
@@ -181,6 +196,13 @@ String _cadena(Array<Uint8> a, int largo) {
     bytes.add(a[i]);
   }
   return const Utf8Decoder(allowMalformed: true).convert(bytes);
+}
+
+/// Hilos para los pasos dificiles: 0 = segun los nucleos (en paralelo, por
+/// defecto), 1 = uno tras otro. Afecta a todo el proceso (todos los isolates).
+void configurarHilos(int hilos, {String? biblioteca}) {
+  final lib = biblioteca == null ? _abrir() : DynamicLibrary.open(biblioteca);
+  lib.lookupFunction<_ConfigurarC, _ConfigurarDart>('ml_configurar')(hilos);
 }
 
 /// Memoria nativa reutilizada entre cuadros (una por isolate).
@@ -256,6 +278,8 @@ ResultadoMotor leerCuadro(
       siguienteRonda: i.siguienteRonda,
       microsegundos: i.microsegundos,
       nitidez: i.nitidez,
+      ilegibles: i.ilegibles,
+      hilos: i.hilos,
       tiempoPorPaso: {
         for (var p = 1; p < _pasos && p < PasoMotor.values.length; p++)
           if (i.tiempoPasoUs[p] > 0) PasoMotor.values[p]: i.tiempoPasoUs[p],

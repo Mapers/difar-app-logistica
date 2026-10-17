@@ -18,10 +18,11 @@ import 'sesion_lectura.dart';
 /// la camara es una ventanita flotante (se agranda con un toque) y un boton
 /// redondo grande dispara la lectura:
 /// * tocar = lee UN codigo (aunque sea el mismo de recien: cada toque cuenta);
-/// * mantener presionado = lee seguido mientras se mantiene, sin repetir el
-///   mismo codigo hasta que pase la espera de Ajustes.
-/// Si hay varios codigos a la vista se lee solo el apuntado (el mas cercano al
-/// centro); los demas se marcan "No escaneado".
+/// * mantener presionado = lee seguido, y TODOS los codigos que se ven en la
+///   ventanita a la vez (en paralelo), sin repetir el mismo codigo hasta que
+///   pase la espera de Ajustes.
+/// Con un toque y varios codigos a la vista se lee solo el apuntado (el mas
+/// cercano al centro); los demas se marcan "No escaneado".
 ///
 /// La camara queda encendida para que el primer toque lea al instante; se
 /// apaga sola tras [_apagarTras] sin usar el boton y se enciende al tocarlo.
@@ -132,7 +133,8 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
     _detectarMantener = Timer(_paraMantener, () {
       if (_dedoAbajo && mounted) {
         setState(() => _sostenido = true);
-        registrar('DISPARO', 'mantener');
+        _camara.buscarTodos = true; // el motor busca todos los del cuadro
+        registrar('DISPARO', 'mantener (todos los visibles)');
       }
     });
   }
@@ -178,6 +180,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
 
   void _desarmar() {
     _finToque?.cancel();
+    _camara.buscarTodos = false;
     if (!mounted) return;
     setState(() {
       _armado = false;
@@ -210,24 +213,38 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
     final vistos = captura.codigos;
     final apuntado = indiceApuntado([for (final v in vistos) v.esquinas], captura.imagen, _tamVista);
 
+    final leidos = <int, ResultadoLectura>{};
     ResultadoLectura? leido;
-    if (_armado && apuntado != null) {
+    if (_armado && _sostenido) {
+      // Mantener: todos los visibles a la vez, un solo aviso por grupo.
+      _sesion.espera = Duration(milliseconds: _ajustes.esperaMs);
+      final ahora = DateTime.now();
+      final visibles = indicesVisibles([for (final v in vistos) v.esquinas], captura.imagen, _tamVista);
+      for (final k in visibles) {
+        final r = _sesion.registrar(vistos[k].valor, vistos[k].formato, ahora, sumarRepetidos: _ajustes.sumarRepetidos);
+        if (r != ResultadoLectura.ignorado) leidos[k] = r;
+      }
+      if (leidos.isNotEmpty) {
+        for (final e in leidos.entries) {
+          _registrarLectura(vistos[e.key], e.value, captura, grupo: leidos.length);
+        }
+        final hayNuevo = leidos.values.contains(ResultadoLectura.nuevo);
+        _avisarLectura(vistos[leidos.keys.first].valor, hayNuevo ? ResultadoLectura.nuevo : ResultadoLectura.sumado);
+        leido = hayNuevo ? ResultadoLectura.nuevo : ResultadoLectura.sumado;
+      }
+    } else if (_armado && apuntado != null) {
       final v = vistos[apuntado];
       _sesion.espera = Duration(milliseconds: _ajustes.esperaMs);
       leido = _sesion.registrar(v.valor, v.formato, DateTime.now(),
           sumarRepetidos: _ajustes.sumarRepetidos,
           // Cada toque es intencional: cuenta aunque sea el mismo de recien.
           forzar: !_sostenido);
-      if (leido != ResultadoLectura.ignorado) {
-        _alLeer(v.valor, leido, v, captura);
-      } else {
-        leido = null;
-        if (!_sostenido) {
-          // Toque sobre un codigo que ya esta y "Sumar repetidos" apagado: se
-          // leyo bien, solo no se suma. Aviso suave, no de error.
-          _alLeer(v.valor, ResultadoLectura.sumado, v, captura);
-        }
-      }
+      // Toque sobre un codigo que ya esta y "Sumar repetidos" apagado: se
+      // leyo bien, solo no se suma. Aviso suave, no de error.
+      final efectivo = leido == ResultadoLectura.ignorado ? ResultadoLectura.sumado : leido;
+      _registrarLectura(v, efectivo, captura);
+      _avisarLectura(v.valor, efectivo);
+      leidos[apuntado] = efectivo;
     } else if (_armado && !_leyoEnDisparo && apuntado == null && captura.ilegible) {
       // La camara ve un codigo pero no puede decodificar su contenido.
       _leyoEnDisparo = true; // un solo aviso por disparo
@@ -242,21 +259,25 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
       registrar('CONSEJO', 'reflejo ${captura.info?.quemados}%: inclinar el telefono');
     }
 
-    _cuadro.value = _Cuadro(captura.imagen, vistos, apuntado, leido);
+    _cuadro.value = _Cuadro(captura.imagen, vistos, apuntado, leidos, todos: _armado && _sostenido);
     _limpiarMarcas?.cancel();
     _limpiarMarcas = Timer(const Duration(milliseconds: 350), () => _cuadro.value = null);
   }
 
-  void _alLeer(String valor, ResultadoLectura r, [CodigoVisto? v, Captura? captura]) {
-    _leyoEnDisparo = true;
-    final i = captura?.info;
-    registrar('LECTURA', '$valor ${v?.formato ?? ""} motor=${v?.fuente ?? "?"}'
-        '${(v?.detalle.isNotEmpty ?? false) ? " paso=${v!.detalle}" : ""} '
+  void _registrarLectura(CodigoVisto v, ResultadoLectura r, Captura captura, {int grupo = 1}) {
+    final i = captura.info;
+    registrar('LECTURA', '${v.valor} ${v.formato}'
+        '${v.detalle.isNotEmpty ? " paso=${v.detalle}" : ""} '
         '${r == ResultadoLectura.nuevo ? "nuevo" : "sumado"} en ${_desdeToque.elapsedMilliseconds}ms '
-        '(${_sostenido ? "mantener" : "toque"}) a_la_vista=${captura?.codigos.length ?? 1}'
-        '${v == null ? '' : ' ${tamanoCodigo(v)}'}'
-        '${captura == null ? '' : ' imagen=${captura.imagen.width.toInt()}x${captura.imagen.height.toInt()}'}'
-        '${i == null ? '' : ' brillo=${i.brillo} nitidez=${i.nitidez} reflejo=${i.quemados}% C++=${i.microsegundos ~/ 1000}ms'}');
+        '(${_sostenido ? "mantener" : "toque"}) a_la_vista=${captura.codigos.length} juntos=$grupo '
+        '${tamanoCodigo(v)} imagen=${captura.imagen.width.toInt()}x${captura.imagen.height.toInt()}'
+        '${i == null ? '' : ' brillo=${i.brillo} nitidez=${i.nitidez} reflejo=${i.quemados}% '
+            'motor=${i.microsegundos ~/ 1000}ms hilos=${i.hilos}'}');
+  }
+
+  /// Pitido, vibracion y resaltado (uno por lectura o por grupo de lecturas).
+  void _avisarLectura(String valor, ResultadoLectura r) {
+    _leyoEnDisparo = true;
     _desdeToque
       ..reset()
       ..start();
@@ -510,16 +531,22 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
 }
 
 class _Cuadro {
-  _Cuadro(this.imagen, this.vistos, this.apuntado, this.leido);
+  _Cuadro(this.imagen, this.vistos, this.apuntado, this.leidos, {this.todos = false});
 
   final Size imagen;
   final List<CodigoVisto> vistos;
   final int? apuntado;
-  final ResultadoLectura? leido;
+
+  /// Indice en [vistos] -> como se conto en este cuadro.
+  final Map<int, ResultadoLectura> leidos;
+
+  /// Manteniendo: se leen todos (no hay "No escaneado").
+  final bool todos;
 }
 
-/// Marca el codigo apuntado (blanco; verde/ambar al leerlo) y, si hay mas de
-/// uno, deja los otros en gris con "No escaneado".
+/// Con un toque marca el codigo apuntado (blanco; verde/ambar al leerlo) y,
+/// si hay mas de uno, deja los otros en gris con "No escaneado". Manteniendo
+/// presionado marca todos, verde/ambar los que se contaron.
 class _MarcasApuntado extends CustomPainter {
   _MarcasApuntado(this.cuadro, {required this.armado});
 
@@ -533,16 +560,17 @@ class _MarcasApuntado extends CustomPainter {
     for (var i = 0; i < c.vistos.length; i++) {
       final puntos = proyectarACubrir(c.vistos[i].esquinas, c.imagen, size);
       if (puntos.length < 4) continue;
-      final esApuntado = i == c.apuntado;
+      final esApuntado = c.todos || i == c.apuntado;
+      final leido = c.leidos[i];
       final color = !esApuntado
           ? Colors.white38
-          : switch (c.leido) {
+          : switch (leido) {
               ResultadoLectura.nuevo => Colors.greenAccent,
               ResultadoLectura.sumado => Colors.amber,
               _ => armado ? Colors.white : Colors.white70,
             };
       final forma = Path()..addPolygon(puntos, true);
-      if (esApuntado && c.leido != null) {
+      if (esApuntado && leido != null) {
         canvas.drawPath(forma, Paint()..color = color.withValues(alpha: 0.35));
       }
       canvas.drawPath(

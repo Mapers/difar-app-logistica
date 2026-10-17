@@ -8,32 +8,35 @@ CodigoVisto codigo(String valor, Simbologia s, String fuente) =>
     CodigoVisto(valor, s.nombre, const [Offset(0, 0)], simbologia: s, fuente: fuente);
 
 void main() {
-  test('un EAN de un solo motor se acepta al primer cuadro', () {
+  test('un EAN se acepta al primer cuadro', () {
     final f = Fusion();
-    expect(f.fusionar([codigo('7750182000123', Simbologia.ean13, 'C++')], []).single.fuente, 'C++');
+    expect(f.confirmar([codigo('7750182000123', Simbologia.ean13, 'C++')]).single.valor, '7750182000123');
   });
 
-  test('ITF de un solo motor espera a verse en 2 cuadros', () {
+  test('ITF espera a verse igual en 2 cuadros', () {
     final f = Fusion();
     final itf = codigo('17750182000124', Simbologia.itf, 'C++');
-    expect(f.fusionar([itf], []), isEmpty);
-    expect(f.fusionar([itf], []).single.valor, '17750182000124');
-  });
-
-  test('ITF leido igual por los dos motores se acepta enseguida', () {
-    final f = Fusion();
-    final r = f.fusionar(
-        [codigo('17750182000124', Simbologia.itf, 'C++')], [codigo('17750182000124', Simbologia.itf, 'ML Kit')]);
-    expect(r.single.fuente, 'C++ + ML Kit');
+    expect(f.confirmar([itf]), isEmpty);
+    expect(f.confirmar([itf]).single.valor, '17750182000124');
   });
 
   test('una lectura parcial que no se repite nunca entra', () {
     final f = Fusion();
-    expect(f.fusionar([codigo('177501', Simbologia.itf, 'C++')], []), isEmpty);
+    expect(f.confirmar([codigo('177501', Simbologia.itf, 'C++')]), isEmpty);
     for (var i = 0; i < 3; i++) {
-      f.fusionar([], []);
+      f.confirmar([]);
     }
-    expect(f.fusionar([codigo('177501', Simbologia.itf, 'C++')], []), isEmpty);
+    expect(f.confirmar([codigo('177501', Simbologia.itf, 'C++')]), isEmpty);
+  });
+
+  test('varios codigos del mismo cuadro salen juntos', () {
+    final f = Fusion();
+    final r = f.confirmar([
+      codigo('7750182000123', Simbologia.ean13, 'C++'),
+      codigo('7750182000124', Simbologia.ean13, 'C++'),
+      codigo('7750182000123', Simbologia.ean13, 'C++'), // repetido en el cuadro
+    ]);
+    expect(r.map((c) => c.valor), ['7750182000123', '7750182000124']);
   });
 
   test('sensor girado 90: punto de la imagen horizontal a la vertical', () {

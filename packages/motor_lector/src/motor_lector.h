@@ -69,16 +69,21 @@ typedef struct {
   int32_t microsegundos;   // tiempo total
   int32_t tiempo_paso_us[ML_PASOS]; // tiempo de cada paso (indice = ML_PASO_*), 0 si no se hizo
   int32_t nitidez;         // promedio del |laplaciano| del centro: bajo = desenfocado o movido
+  int32_t ilegibles;       // simbolos encontrados que fallaron la verificacion (codigo danado)
+  int32_t hilos;           // hilos usados en los pasos dificiles
 } ml_info;
+
+// Hilos para los pasos dificiles: 0 = segun los nucleos (por defecto, en
+// paralelo), 1 = uno tras otro repartidos entre cuadros con [ronda].
+FFI_PLUGIN_EXPORT void ml_configurar(int32_t hilos);
 
 // Lee los codigos de un cuadro. Devuelve cuantos escribio en [salida].
 // [multiple] != 0: busca todos los codigos del cuadro (conteo multiple) y
 // junta lo que lea cada paso; si no, corta con el primero.
-// [presupuesto_us]: tiempo maximo aproximado por cuadro (0 = sin limite).
-// El paso rapido siempre se hace; los dificiles, mientras alcance el tiempo.
-// [ronda]: numero de cuadro. Los pasos dificiles se reparten entre cuadros:
-// cada uno empieza donde quedo el anterior, asi ningun cuadro tarda mucho y
-// en pocos cuadros se prueban todos.
+// Primero el paso rapido; si no alcanza, los dificiles. En paralelo (por
+// defecto) corren todos a la vez en varios hilos. Uno tras otro (ver
+// ml_configurar): [presupuesto_us] es el tope por cuadro (0 = sin limite) y
+// [ronda] el numero de cuadro, para seguir donde quedo el anterior.
 FFI_PLUGIN_EXPORT int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, int32_t bytes_por_fila,
                                   int32_t formato_pixel, int32_t formatos, int32_t multiple,
                                   int32_t presupuesto_us, int32_t ronda, ml_codigo* salida,

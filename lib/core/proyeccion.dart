@@ -23,6 +23,16 @@ Offset centroDe(List<Offset> puntos) {
   return Offset(x / puntos.length, y / puntos.length);
 }
 
+/// Indices de los codigos cuyo centro cae dentro de lo que se ve en
+/// pantalla (la imagen se recorta con `cover`).
+List<int> indicesVisibles(List<List<Offset>> esquinas, Size imagen, Size vista) {
+  final visible = Offset.zero & vista;
+  return [
+    for (var i = 0; i < esquinas.length; i++)
+      if (esquinas[i].isNotEmpty && visible.contains(centroDe(proyectarACubrir(esquinas[i], imagen, vista)))) i,
+  ];
+}
+
 /// "Intended scan": de varios codigos en el cuadro, el que se esta apuntando
 /// es el mas cercano al centro de lo que se ve en pantalla. Los que caen fuera
 /// de la vista (la imagen se recorta con `cover`) no cuentan.

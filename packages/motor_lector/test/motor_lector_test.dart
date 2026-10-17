@@ -62,7 +62,16 @@ void main() {
     expect(r.info.nitidez, greaterThan(0));
   }, skip: saltar);
 
+  test('en paralelo lee todo en un cuadro; uno tras otro con tope reparte entre cuadros', () {
+    configurarHilos(4, biblioteca: so);
+    final par = leer('rotado_itf14');
+    expect(par.codigos.single.texto, '17750182000124');
+    expect(par.info.hilos, 4);
+    configurarHilos(1, biblioteca: so);
+  }, skip: saltar);
+
   test('pasos repartidos entre cuadros con tope de tiempo', () {
+    configurarHilos(1, biblioteca: so);
     // Con 1 us de tope cada cuadro hace el rapido + un paso dificil y avanza la ronda.
     var ronda = 0;
     var leido = false;
@@ -74,6 +83,7 @@ void main() {
       leido = r.codigos.isNotEmpty;
     }
     expect(leido, isTrue);
+    configurarHilos(0, biblioteca: so);
   }, skip: saltar);
 
   test('imagen sin codigos: vacio, sin errores', () {

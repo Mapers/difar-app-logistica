@@ -17,8 +17,11 @@ lector) y le agrega preparacion de imagen por pasos para codigos dificiles
 | completo | mas esfuerzo, 2D invertido |
 | ampliado | centro ampliado 2x y enfocado (chico o lejos) |
 
-Los pasos dificiles se reparten entre cuadros con un tope de tiempo por
-cuadro (`presupuesto_us`, `ronda`), y se ordenan segun la luz medida.
+Primero el paso rapido; si no alcanza, los dificiles **en paralelo** (un
+hilo por paso, segun los nucleos): el cuadro devuelve apenas uno lee y los
+demas terminan solos sobre su copia de la imagen. Con `ml_configurar(1)` corren
+uno tras otro, repartidos entre cuadros con un tope (`presupuesto_us`,
+`ronda`). Se ordenan segun la luz medida.
 Formatos sin digito de control (ITF, Code 39/93, Codabar) exigen largo minimo.
 
 ## Pruebas
@@ -34,7 +37,9 @@ cmake -S src -B /tmp/motor -DCMAKE_BUILD_TYPE=Release && cmake --build /tmp/moto
 MOTOR_LECTOR_SO=/tmp/motor/libmotor_lector.so flutter test
 ```
 
-Resultado del banco (PC, tope 15 ms por cuadro): zxing solo 17/40, motor 36/40.
+Resultado del banco (PC de 4 nucleos): zxing solo 17/40, motor 36/40; tiempo
+total hasta leer los 36: 1090 ms uno tras otro, 503 ms en paralelo (todos en
+el primer cuadro). `BANCO_HILOS=1` para medir uno tras otro.
 No leidos: 1D con ~2 px por barra y desenfocados (acercarse o zoom) y un
 Code 128 largo sobre una botella muy curva (girar la botella).
 

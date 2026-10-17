@@ -192,7 +192,11 @@ int main() {
   // Tope por cuadro en la PC; en un telefono medio el mismo trabajo tarda ~3x.
   const int presupuesto = std::getenv("BANCO_US") ? std::atoi(std::getenv("BANCO_US")) : 15000;
   int peores = 0, totalBase = 0, totalMotor = 0, peorCuadro = 0;
-  std::printf("tope por cuadro: %.1f ms\n", presupuesto / 1000.0);
+  double tiempoTotal = 0; // suma, en los leidos, del tiempo de todos los cuadros hasta leer
+  const int hilos = std::getenv("BANCO_HILOS") ? std::atoi(std::getenv("BANCO_HILOS")) : 0;
+  ml_configurar(hilos);
+  std::printf("hilos: %s   tope por cuadro (solo uno tras otro): %.1f ms\n",
+              hilos == 0 ? "segun nucleos (paralelo)" : std::to_string(hilos).c_str(), presupuesto / 1000.0);
   std::printf("%-17s %-11s %-6s %-6s %-5s %-7s %s\n", "escena", "codigo", "zxing", "motor", "paso", "cuadros",
               "ms peor cuadro  [ms por paso | por cuadro]");
   for (const auto& e : escenas) {
@@ -215,12 +219,13 @@ int main() {
       // ronda que devuelve el motor, hasta leer (o 12 cuadros).
       ml_codigo sal[4];
       ml_info info;
-      int n = 0, cuadros = 0, ronda = 0, peorUs = 0;
+      int n = 0, cuadros = 0, ronda = 0, peorUs = 0, sumaUs = 0;
       std::string tiempos;
       for (; cuadros < 12 && n == 0; cuadros++) {
         n = ml_leer(bytes.data(), W, H, W, ML_PIXEL_LUMA, 0, 0, presupuesto, ronda, sal, 4, &info);
         ronda = info.siguiente_ronda;
         peorUs = std::max(peorUs, info.microsegundos);
+        sumaUs += info.microsegundos;
         for (int p = 1; p < ML_PASOS; p++)
           if (info.tiempo_paso_us[p]) tiempos += " " + std::to_string(p) + ":" + std::to_string(info.tiempo_paso_us[p] / 1000);
         tiempos += " |";
@@ -244,10 +249,11 @@ int main() {
                   okMotor ? "si" : "NO", okMotor ? sal[0].paso : 0, okMotor ? cuadros : 0, peorUs / 1000.0,
                   tiempos.c_str());
       peorCuadro = std::max(peorCuadro, peorUs);
+      if (okMotor) tiempoTotal += sumaUs;
     }
   }
   const int total = (int)(escenas.size() * codigos.size());
-  std::printf("\nzxing solo: %d/%d   motor: %d/%d   cuadro mas lento: %.1f ms\n", totalBase, total, totalMotor, total,
-              peorCuadro / 1000.0);
+  std::printf("\nzxing solo: %d/%d   motor: %d/%d   cuadro mas lento: %.1f ms   tiempo total hasta leer: %.0f ms\n",
+              totalBase, total, totalMotor, total, peorCuadro / 1000.0, tiempoTotal / 1000.0);
   return peores > 0 ? 1 : 0;
 }

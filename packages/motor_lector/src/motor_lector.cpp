@@ -4,10 +4,15 @@
 #include "ReadBarcode.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace ZXing;
@@ -15,6 +20,16 @@ using namespace ZXing;
 namespace {
 
 using Reloj = std::chrono::steady_clock;
+
+// Hilos para los pasos dificiles (ml_configurar). <= 1: uno tras otro,
+// repartidos entre cuadros con [ronda].
+std::atomic<int> gHilos{0}; // 0 = segun los nucleos del telefono
+
+int hilosEnUso() {
+  const int h = gHilos.load();
+  if (h > 0) return h;
+  return (int)std::clamp(std::thread::hardware_concurrency(), 1u, 8u);
+}
 
 struct Formato {
   int32_t bit;
@@ -78,8 +93,12 @@ struct Lectura {
 
 struct Lector {
   BarcodeFormats formatos;
-  bool multiple;
+  bool multiple = false;
   std::vector<Lectura> leidos;
+  // Los pasos corren en paralelo: lo compartido va protegido.
+  std::mutex cerrojo;
+  std::atomic<bool> hayUno{false};
+  std::atomic<int> ilegibles{0};
 
   ReaderOptions opciones(bool esfuerzo) const {
     ReaderOptions o;
@@ -93,17 +112,140 @@ struct Lector {
     return o;
   }
 
-  void leer(const ImageView& img, const ReaderOptions& o, int paso, Afin t = {}, bool invertido = false) {
-    for (auto& b : ReadBarcodes(img, o)) {
-      if (!b.isValid() || !confiable(b)) continue;
+  // [errores]: tambien devuelve simbolos encontrados que fallan la
+  // verificacion (se cuentan como ilegibles: hay codigo pero esta danado).
+  void leer(const ImageView& img, ReaderOptions o, int paso, Afin t = {}, bool invertido = false,
+            bool errores = false) {
+    if (listo()) return;
+    o.setReturnErrors(errores);
+    auto encontrados = ReadBarcodes(img, o);
+    std::lock_guard<std::mutex> l(cerrojo);
+    for (auto& b : encontrados) {
+      if (!b.isValid()) {
+        if (b.error().type() == Error::Type::Checksum) ilegibles++;
+        continue;
+      }
+      if (!confiable(b)) continue;
       const bool repetido = std::any_of(leidos.begin(), leidos.end(), [&](const Lectura& l) {
         return l.codigo.text() == b.text() && Symbology(l.codigo.format()) == Symbology(b.format());
       });
-      if (!repetido) leidos.push_back({std::move(b), paso, t, invertido});
+      if (!repetido) {
+        leidos.push_back({std::move(b), paso, t, invertido});
+        hayUno = true;
+      }
     }
   }
 
-  bool listo() const { return !multiple && !leidos.empty(); }
+  bool listo() const { return !multiple && hayUno.load(); }
+};
+
+// Todo lo de un cuadro. Se comparte (shared_ptr) entre los hilos: si uno
+// lee el codigo buscado, ml_leer devuelve enseguida y los hilos que siguen
+// trabajando terminan solos sobre su propia copia, sin hacer esperar a nadie.
+struct Trabajo {
+  Reloj::time_point inicio = Reloj::now();
+  int ancho = 0, alto = 0, fila = 0;
+  std::vector<uint8_t> copia; // pixeles propios (los de Dart se reusan en el proximo cuadro)
+  const uint8_t* px = nullptr;
+  prep::Estadistica est{};
+  Lector lector;
+  bool conTope = false;
+  int presupuesto_us = 0;
+
+  // Zona de trabajo: buscando UN codigo, la central (75%: lo que se ve en
+  // la ventanita); en conteo multiple, todo el cuadro. La ajustada (60%) es
+  // para los pasos caros: cuesta menos y el umbral por linea mezcla menos
+  // fondo con las barras.
+  int zw = 0, zh = 0, zx = 0, zy = 0, rw = 0, rh = 0, rx = 0, ry = 0;
+
+  std::atomic<int> tiempos[ML_PASOS] = {};
+  std::atomic<int> pasosHechos{0};
+  std::mutex espera;
+  std::condition_variable aviso;
+  int trabajando = 0;
+
+  int usado() const {
+    return (int)std::chrono::duration_cast<std::chrono::microseconds>(Reloj::now() - inicio).count();
+  }
+  ImageView entrada() const { return ImageView(px, ancho, alto, ImageFormat::Lum, fila); }
+  const uint8_t* zona() const { return px + (size_t)zy * fila + zx; }
+  const uint8_t* ajustada() const { return px + (size_t)ry * fila + rx; }
+  Afin enZona() const { return Afin::desplazar((float)zx, (float)zy); }
+  Afin enAjustada() const { return Afin::desplazar((float)rx, (float)ry); }
+
+  void rapido() {
+    lector.leer(entrada().cropped(zx, zy, zw, zh), lector.opciones(false), ML_PASO_RAPIDO, enZona(), false, true);
+  }
+  void invertido() {
+    auto img = prep::invertir(zona(), zw, zh, fila);
+    lector.leer(img.vista(), lector.opciones(false), ML_PASO_INVERTIDO, enZona(), true);
+  }
+  void reflejos() {
+    // 1D: promedio a lo largo de las barras + normalizacion local (bolsas
+    // arrugadas, sombras, reflejos parciales). Dos tamanos de vecindario:
+    // el grande para manchas amplias, el chico para sombras cortadas.
+    auto o = lector.opciones(true);
+    for (const int radio : {std::max(15, ancho / 33), std::max(10, ancho / 63)}) {
+      auto img = prep::afinar1D(ajustada(), rw, rh, fila, 8, radio);
+      lector.leer(img.vista(), o, ML_PASO_REFLEJOS, enAjustada());
+      if (lector.listo() || (conTope && usado() >= presupuesto_us)) return;
+    }
+    // 2D (no tiene "a lo largo"): normalizacion local + enfoque.
+    auto img = prep::enfocar(prep::normalizarLocal(zona(), zw, zh, fila, std::max(15, ancho / 33)), 1.0f);
+    lector.leer(img.vista(), o, ML_PASO_REFLEJOS, enZona());
+  }
+  void rotado() {
+    // Girado 45: con las rotaciones de 90 de zxing cubre cualquier angulo.
+    auto img = prep::rotar45(ajustada(), rw, rh, fila);
+    const float r = 0.70710678f, c = img.ancho / 2.0f;
+    // Inversa de prep::rotar45 (ver preparar.cpp), mas el desplazamiento de la zona.
+    const Afin t{r, r, -r, r, rw / 2.0f - 2 * r * c + rx, rh / 2.0f + ry};
+    lector.leer(img.vista(), lector.opciones(false), ML_PASO_ROTADO, t);
+    if (!lector.listo()) {
+      auto fino = prep::afinar1D(img.px.data(), img.ancho, img.alto, img.ancho, 6, std::max(15, img.ancho / 20));
+      lector.leer(fino.vista(), lector.opciones(true), ML_PASO_ROTADO, t);
+    }
+  }
+  void pocaLuz() {
+    auto img = prep::clahe(zona(), zw, zh, fila, 8, 8, 3.0f);
+    lector.leer(img.vista(), lector.opciones(true), ML_PASO_POCA_LUZ, enZona());
+  }
+  void completo() {
+    // Con esfuerzo: mas lineas, rotaciones de 90 y 2D invertido.
+    lector.leer(entrada().cropped(zx, zy, zw, zh), lector.opciones(true), ML_PASO_COMPLETO, enZona(), false, true);
+  }
+  void ampliado() {
+    // Chico, lejos o borroso: centro ampliado 2x y enfocado.
+    const int aw = rw * 2 / 3, ah = rh * 2 / 3, ax = (rw - aw) / 2, ay = (rh - ah) / 2;
+    const Afin t = Afin::desplazar((float)(rx + ax), (float)(ry + ay), 0.5f);
+    auto img = prep::ampliar2x(ajustada() + (size_t)ay * fila + ax, aw, ah, fila);
+    lector.leer(prep::enfocar(img, 1.5f).vista(), lector.opciones(true), ML_PASO_AMPLIADO, t);
+    if (!lector.listo()) {
+      auto fino = prep::afinar1D(img.px.data(), img.ancho, img.alto, img.ancho, 6, std::max(15, img.ancho / 20));
+      lector.leer(fino.vista(), lector.opciones(true), ML_PASO_AMPLIADO, t);
+    }
+  }
+
+  void hacer(int paso) {
+    if (lector.listo()) return;
+    const int antes = usado();
+    switch (paso) {
+    case ML_PASO_RAPIDO: rapido(); break;
+    case ML_PASO_INVERTIDO: invertido(); break;
+    case ML_PASO_REFLEJOS: reflejos(); break;
+    case ML_PASO_ROTADO: rotado(); break;
+    case ML_PASO_POCA_LUZ: pocaLuz(); break;
+    case ML_PASO_COMPLETO: completo(); break;
+    case ML_PASO_AMPLIADO: ampliado(); break;
+    }
+    tiempos[paso] = std::max(1, usado() - antes);
+    pasosHechos++;
+    if (lector.listo()) {
+      // Despierta a ml_leer, que espera el primer codigo (no a todos los hilos).
+      std::lock_guard<std::mutex> l(espera);
+      aviso.notify_all();
+    }
+  }
 };
 
 void copiarTexto(char* destino, size_t capacidad, const std::string& texto) {
@@ -113,6 +255,8 @@ void copiarTexto(char* destino, size_t capacidad, const std::string& texto) {
 }
 
 } // namespace
+
+extern "C" void ml_configurar(int32_t hilos) { gHilos = std::max(0, (int)hilos); }
 
 extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, int32_t bytes_por_fila,
                            int32_t formato_pixel, int32_t formatos, int32_t multiple, int32_t presupuesto_us,
@@ -127,143 +271,119 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
   if (!datos || ancho <= 0 || alto <= 0 || !salida || max_salida <= 0) return 0;
 
   try {
-    // Luminancia: en Android el plano Y ya lo es (sin copiar); en iOS se convierte.
-    prep::Gris bgra;
-    const uint8_t* px = datos;
-    int fila = bytes_por_fila > 0 ? bytes_por_fila : ancho;
+    auto t = std::make_shared<Trabajo>();
+    t->inicio = inicio;
+    t->ancho = ancho;
+    t->alto = alto;
+    const int hilos = hilosEnUso();
+    const int fila = bytes_por_fila > 0 ? bytes_por_fila : ancho;
     if (formato_pixel == ML_PIXEL_BGRA) {
-      bgra = prep::deBgra(datos, ancho, alto, fila);
-      px = bgra.px.data();
-      fila = ancho;
+      // iOS: se convierte a luminancia (ya queda en memoria propia).
+      t->copia = prep::deBgra(datos, ancho, alto, fila).px;
+      t->fila = ancho;
+    } else if (hilos > 1) {
+      // En paralelo los hilos pueden seguir despues de devolver: copia propia.
+      t->copia.resize((size_t)ancho * alto);
+      for (int y = 0; y < alto; y++) std::memcpy(&t->copia[(size_t)y * ancho], datos + (size_t)y * fila, ancho);
+      t->fila = ancho;
+    } else {
+      t->fila = fila; // uno tras otro: se lee directo, sin copiar
     }
-    const ImageView entrada(px, ancho, alto, ImageFormat::Lum, fila);
+    t->px = t->copia.empty() ? datos : t->copia.data();
 
-    const auto est = prep::medir(px, ancho, alto, fila);
-    info->brillo = est.brillo;
-    info->contraste = est.contraste;
-    info->quemados = est.quemados;
-    info->nitidez = est.nitidez;
-    info->sugerir_linterna = est.brillo < 60 ? 1 : 0;
+    t->est = prep::medir(t->px, ancho, alto, t->fila);
+    info->brillo = t->est.brillo;
+    info->contraste = t->est.contraste;
+    info->quemados = t->est.quemados;
+    info->nitidez = t->est.nitidez;
+    info->sugerir_linterna = t->est.brillo < 60 ? 1 : 0;
+    info->hilos = hilos;
 
-    Lector lector{aFormatosZx(formatos), multiple != 0, {}};
-
-    // Zona de trabajo: buscando UN codigo, la zona central (lo que se ve en
-    // la ventanita); en conteo multiple, todo el cuadro.
-    const int zw = multiple ? ancho : ancho * 3 / 4, zh = multiple ? alto : alto * 3 / 4;
-    const int zx = (ancho - zw) / 2, zy = (alto - zh) / 2;
-    const uint8_t* zona = px + (size_t)zy * fila + zx;
-    const ImageView vistaZona = entrada.cropped(zx, zy, zw, zh);
-    const Afin enZona = Afin::desplazar((float)zx, (float)zy);
-    // Zona ajustada (60% buscando uno) para los pasos caros: cuesta menos y el
-    // umbral por linea mezcla menos fondo con las barras.
-    const int rw = multiple ? zw : ancho * 6 / 10, rh = multiple ? zh : alto * 6 / 10;
-    const int rx = (ancho - rw) / 2, ry = (alto - rh) / 2;
-    const uint8_t* ajustada = px + (size_t)ry * fila + rx;
-    const Afin enAjustada = Afin::desplazar((float)rx, (float)ry);
-
-    using Paso = std::function<void()>;
-    auto poca_luz = [&] {
-      auto img = prep::clahe(zona, zw, zh, fila, 8, 8, 3.0f);
-      lector.leer(img.vista(), lector.opciones(true), ML_PASO_POCA_LUZ, enZona);
-    };
-    auto reflejos = [&] {
-      // 1D: promedio a lo largo de las barras + normalizacion local (bolsas
-      // arrugadas, sombras, reflejos parciales). Dos tamanos de vecindario:
-      // el grande para manchas amplias, el chico para sombras cortadas.
-      auto o = lector.opciones(true);
-      for (const int radio : {std::max(15, ancho / 33), std::max(10, ancho / 63)}) {
-        auto img = prep::afinar1D(ajustada, rw, rh, fila, 8, radio);
-        lector.leer(img.vista(), o, ML_PASO_REFLEJOS, enAjustada);
-        if (lector.listo() || (presupuesto_us > 0 && usado() >= presupuesto_us)) return;
-      }
-      // 2D (no tiene "a lo largo"): normalizacion local + enfoque.
-      auto img = prep::enfocar(prep::normalizarLocal(zona, zw, zh, fila, std::max(15, ancho / 33)), 1.0f);
-      lector.leer(img.vista(), o, ML_PASO_REFLEJOS, enZona);
-    };
-
-    auto rapido = [&] { lector.leer(vistaZona, lector.opciones(false), ML_PASO_RAPIDO, enZona); };
-    auto invertido = [&] {
-      auto img = prep::invertir(zona, zw, zh, fila);
-      lector.leer(img.vista(), lector.opciones(false), ML_PASO_INVERTIDO, enZona, true);
-    };
-    auto rotado = [&] {
-      // Girado 45: con las rotaciones de 90 de zxing cubre cualquier angulo.
-      auto img = prep::rotar45(ajustada, rw, rh, fila);
-      const float r = 0.70710678f, c = img.ancho / 2.0f;
-      // Inversa de prep::rotar45 (ver preparar.cpp), mas el desplazamiento de la zona.
-      const Afin t{r, r, -r, r, rw / 2.0f - 2 * r * c + rx, rh / 2.0f + ry};
-      lector.leer(img.vista(), lector.opciones(false), ML_PASO_ROTADO, t);
-      if (!lector.listo()) {
-        auto fino = prep::afinar1D(img.px.data(), img.ancho, img.alto, img.ancho, 6, std::max(15, img.ancho / 20));
-        lector.leer(fino.vista(), lector.opciones(true), ML_PASO_ROTADO, t);
-      }
-    };
-    auto completo = [&] {
-      // Con esfuerzo: mas lineas, rotaciones de 90 y 2D invertido. Buscando
-      // UN codigo basta la zona central (el apuntado esta ahi y cuesta un
-      // tercio); en conteo multiple, todo el cuadro.
-      lector.leer(vistaZona, lector.opciones(true), ML_PASO_COMPLETO, enZona);
-    };
-    auto ampliado = [&] {
-      // Chico, lejos o borroso: centro ampliado 2x y enfocado.
-      const int aw = rw * 2 / 3, ah = rh * 2 / 3, ax = (rw - aw) / 2, ay = (rh - ah) / 2;
-      const Afin t = Afin::desplazar((float)(rx + ax), (float)(ry + ay), 0.5f);
-      auto img = prep::ampliar2x(ajustada + (size_t)ay * fila + ax, aw, ah, fila);
-      lector.leer(prep::enfocar(img, 1.5f).vista(), lector.opciones(true), ML_PASO_AMPLIADO, t);
-      if (!lector.listo()) {
-        auto fino = prep::afinar1D(img.px.data(), img.ancho, img.alto, img.ancho, 6, std::max(15, img.ancho / 20));
-        lector.leer(fino.vista(), lector.opciones(true), ML_PASO_AMPLIADO, t);
-      }
-    };
+    t->lector.formatos = aFormatosZx(formatos);
+    t->lector.multiple = multiple != 0;
+    t->conTope = hilos <= 1 && presupuesto_us > 0;
+    t->presupuesto_us = presupuesto_us;
+    t->zw = multiple ? ancho : ancho * 3 / 4;
+    t->zh = multiple ? alto : alto * 3 / 4;
+    t->zx = (ancho - t->zw) / 2;
+    t->zy = (alto - t->zh) / 2;
+    t->rw = multiple ? t->zw : ancho * 6 / 10;
+    t->rh = multiple ? t->zh : alto * 6 / 10;
+    t->rx = (ancho - t->rw) / 2;
+    t->ry = (alto - t->rh) / 2;
 
     // Pasos dificiles, de barato a caro. Segun la luz medida, primero el que
     // mas probablemente resuelva.
-    std::vector<std::pair<int, Paso>> dificiles = {
-        {ML_PASO_INVERTIDO, invertido}, {ML_PASO_REFLEJOS, reflejos}, {ML_PASO_ROTADO, rotado},
-        {ML_PASO_POCA_LUZ, poca_luz},   {ML_PASO_COMPLETO, completo}, {ML_PASO_AMPLIADO, ampliado},
-    };
+    std::vector<int> dificiles = {ML_PASO_INVERTIDO, ML_PASO_REFLEJOS, ML_PASO_ROTADO,
+                                  ML_PASO_POCA_LUZ,  ML_PASO_COMPLETO, ML_PASO_AMPLIADO};
     auto adelantar = [&](int paso) {
-      auto it = std::find_if(dificiles.begin(), dificiles.end(), [&](auto& p) { return p.first == paso; });
+      auto it = std::find(dificiles.begin(), dificiles.end(), paso);
       if (it != dificiles.end()) std::rotate(dificiles.begin(), it, it + 1);
     };
-    if (est.brillo < 70) adelantar(ML_PASO_POCA_LUZ);
-    if (est.quemados >= 3 || est.contraste < 30 || est.brillo < 70) adelantar(ML_PASO_REFLEJOS);
+    if (t->est.brillo < 70) adelantar(ML_PASO_POCA_LUZ);
+    if (t->est.quemados >= 3 || t->est.contraste < 30 || t->est.brillo < 70) adelantar(ML_PASO_REFLEJOS);
 
-    auto medir = [&](int paso, const Paso& hacer) {
-      const int antes = usado();
-      hacer();
-      info->tiempo_paso_us[paso] = std::max(1, usado() - antes);
-      info->pasos++;
-    };
-    medir(ML_PASO_RAPIDO, rapido);
+    t->hacer(ML_PASO_RAPIDO);
 
     const int n = (int)dificiles.size();
-    const int desde = ((ronda % n) + n) % n;
-    int hechos = 0;
-    while (hechos < n && !lector.listo()) {
-      if (hechos > 0 && presupuesto_us > 0 && usado() >= presupuesto_us) break;
-      const auto& [paso, hacer] = dificiles[(desde + hechos) % n];
-      medir(paso, hacer);
-      hechos++;
+    if (t->lector.listo()) {
+      info->siguiente_ronda = ronda + 1;
+    } else if (hilos > 1) {
+      // En paralelo: todos los pasos dificiles a la vez, repartidos en los
+      // nucleos; en cada cuadro se prueba todo. Buscando uno, se devuelve
+      // apenas alguno lee (los demas terminan solos y se descartan); en
+      // conteo multiple se espera a todos para juntar todo lo leido.
+      auto cola = std::make_shared<std::atomic<int>>(0);
+      const int grupo = std::min(hilos, n);
+      t->trabajando = grupo;
+      for (int h = 0; h < grupo; h++) {
+        std::thread([t, cola, dificiles] {
+          for (int k; (k = (*cola)++) < (int)dificiles.size();) t->hacer(dificiles[k]);
+          std::lock_guard<std::mutex> l(t->espera);
+          t->trabajando--;
+          t->aviso.notify_all();
+        }).detach();
+      }
+      std::unique_lock<std::mutex> l(t->espera);
+      t->aviso.wait(l, [&] { return t->trabajando == 0 || t->lector.listo(); });
+      info->siguiente_ronda = ronda + 1;
+    } else {
+      // Uno tras otro, con tope de tiempo; el siguiente cuadro sigue donde quedo.
+      const int desde = ((ronda % n) + n) % n;
+      int hechos = 0;
+      while (hechos < n && !t->lector.listo()) {
+        if (hechos > 0 && presupuesto_us > 0 && usado() >= presupuesto_us) break;
+        t->hacer(dificiles[(desde + hechos) % n]);
+        hechos++;
+      }
+      info->siguiente_ronda = ronda + std::max(hechos, 1);
     }
-    info->siguiente_ronda = ronda + std::max(hechos, 1);
+    for (int p = 0; p < ML_PASOS; p++) info->tiempo_paso_us[p] = t->tiempos[p].load();
+    info->pasos = t->pasosHechos.load();
+    info->ilegibles = t->lector.ilegibles.load();
 
+    // Copia de lo leido bajo el cerrojo: puede haber hilos todavia agregando.
+    std::vector<Lectura> leidos;
+    {
+      std::lock_guard<std::mutex> l(t->lector.cerrojo);
+      leidos = t->lector.leidos;
+    }
     int32_t escritos = 0;
-    for (const auto& l : lector.leidos) {
+    for (const auto& lec : leidos) {
       if (escritos >= max_salida) break;
       ml_codigo& c = salida[escritos++];
       std::memset(&c, 0, sizeof(ml_codigo));
-      c.formato = aBit(l.codigo.format());
-      c.paso = l.paso;
-      c.invertido = (l.invertido || l.codigo.isInverted()) ? 1 : 0;
-      const auto& pos = l.codigo.position();
-      const Afin& t = l.aEntrada;
+      c.formato = aBit(lec.codigo.format());
+      c.paso = lec.paso;
+      c.invertido = (lec.invertido || lec.codigo.isInverted()) ? 1 : 0;
+      const auto& pos = lec.codigo.position();
+      const Afin& a = lec.aEntrada;
       for (int i = 0; i < 4; i++) {
-        c.x[i] = (int32_t)(t.a * pos[i].x + t.b * pos[i].y + t.tx);
-        c.y[i] = (int32_t)(t.c * pos[i].x + t.d * pos[i].y + t.ty);
+        c.x[i] = (int32_t)(a.a * pos[i].x + a.b * pos[i].y + a.tx);
+        c.y[i] = (int32_t)(a.c * pos[i].x + a.d * pos[i].y + a.ty);
       }
-      copiarTexto(c.nombre_formato, sizeof(c.nombre_formato), ToString(l.codigo.format()));
-      copiarTexto(c.texto, sizeof(c.texto), l.codigo.text());
+      copiarTexto(c.nombre_formato, sizeof(c.nombre_formato), ToString(lec.codigo.format()));
+      copiarTexto(c.texto, sizeof(c.texto), lec.codigo.text());
     }
     info->microsegundos = usado();
     return escritos;

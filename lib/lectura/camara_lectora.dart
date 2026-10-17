@@ -4,7 +4,6 @@ import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart' as mlkit;
 import 'package:motor_lector/motor_lector.dart';
 
 import '../core/codigos.dart';
@@ -20,19 +19,17 @@ class Captura {
   final Size imagen;
   final List<CodigoVisto> codigos;
 
-  /// Medicion del motor C++ (luz, reflejos, tiempos). Null si no corrio.
+  /// Medicion del motor (luz, reflejos, tiempos). Null si no corrio.
   final InfoMotor? info;
 
-  /// ML Kit vio un codigo pero no pudo sacar su contenido.
+  /// El motor encontro un codigo pero fallo su verificacion (danado).
   final bool ilegible;
 }
 
-/// Camara + los dos motores de lectura sobre el mismo cuadro:
-/// * motor C++ (zxing-cpp + preparacion: oscuridad, reflejos, invertidos,
-///   rotados), en su propio isolate;
-/// * Google ML Kit (muy bueno con codigos curvos o desenfocados).
-/// Se procesa un cuadro a la vez; los que llegan mientras tanto se descartan,
-/// asi la vista previa nunca se atrasa.
+/// Camara + motor de lectura propio (C++: zxing-cpp + preparacion de imagen),
+/// en su propio isolate; dentro del motor los pasos dificiles corren en
+/// paralelo en varios nucleos. Se procesa un cuadro a la vez; los que llegan
+/// mientras tanto se descartan, asi la vista previa nunca se atrasa.
 class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   CamaraLectora(this.ajustes, {this.multiple = false});
 
@@ -41,15 +38,17 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   /// Conteo multiple: busca todos los codigos del cuadro, no solo el centro.
   final bool multiple;
 
-  /// Tope de tiempo del motor C++ por cuadro (los pasos dificiles siguen en
-  /// los cuadros siguientes).
+  /// Mientras sea true busca todos los codigos del cuadro aunque la camara
+  /// sea de "uno" (al mantener presionado el boton se leen todos a la vez).
+  bool buscarTodos = false;
+
+  /// Tope de tiempo por cuadro, solo si el motor corre uno tras otro (en
+  /// paralelo prueba todo en cada cuadro).
   static const presupuestoUs = 45000;
 
   CameraController? _control;
   CameraController? get control => _control;
   MotorLector? _motor;
-  mlkit.BarcodeScanner? _mlkit;
-  GrupoFormatos? _grupoMlkit;
   final _fusion = Fusion();
   final _capturas = StreamController<Captura>.broadcast();
   Stream<Captura> get capturas => _capturas.stream;
@@ -77,7 +76,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
   // Estadisticas para el registro (se vuelcan cada 2 s).
   final _reloj = Stopwatch();
   int _recibidos = 0, _procesados = 0, _cuadrosConCodigo = 0;
-  int _msCppTotal = 0, _msCppMax = 0, _msMlTotal = 0, _msMlMax = 0;
+  int _msMotorTotal = 0, _msMotorMax = 0, _msIdaTotal = 0, _msIdaMax = 0, _leidosEnLapso = 0;
   bool _tamanoRegistrado = false;
 
   bool get lista => _control?.value.isInitialized ?? false;
@@ -127,7 +126,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       _zoomMax = math.min(await control.getMaxZoomLevel(), 8);
       if (aumento != 1) await control.setZoomLevel(aumento.clamp(_zoomMin, _zoomMax));
       if (linterna) await control.setFlashMode(FlashMode.torch);
-      await _prepararMotores();
+      _motor ??= await MotorLector.iniciar();
       await control.startImageStream(_alCuadro);
       error = null;
       permisoDenegado = false;
@@ -137,7 +136,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
         ..start();
       registrar('CAMARA', 'encendida ${multiple ? "multiple" : "uno"} giro=${trasera.sensorOrientation} '
           'vista=${_tam(control.value.previewSize)} zoom=${_zoomMin.toStringAsFixed(1)}-${_zoomMax.toStringAsFixed(1)} '
-          'motor=${ajustes.motor.name} formatos=${ajustes.grupo.name}');
+          'formatos=${ajustes.grupo.name} nucleos=${Platform.numberOfProcessors}');
     } on CameraException catch (e) {
       permisoDenegado = e.code.contains('AccessDenied') || e.code.contains('Permission');
       error = permisoDenegado ? null : '${e.code}: ${e.description ?? ''}';
@@ -149,16 +148,6 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       registrar('ERROR', 'camara $e');
     }
     notifyListeners();
-  }
-
-  Future<void> _prepararMotores() async {
-    final motor = ajustes.motor;
-    if (motor != MotorLectura.mlkit) _motor ??= await MotorLector.iniciar();
-    if (motor != MotorLectura.cpp && (_mlkit == null || _grupoMlkit != ajustes.grupo)) {
-      await _mlkit?.close();
-      _grupoMlkit = ajustes.grupo;
-      _mlkit = mlkit.BarcodeScanner(formats: ajustes.grupo.formatosMlkit);
-    }
   }
 
   /// Apaga la camara (libera el sensor para otra pantalla o ahorra bateria).
@@ -226,71 +215,44 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     final sensor = Size(img.width.toDouble(), img.height.toDouble());
     final grupo = ajustes.grupo;
 
-    // Los dos motores a la vez sobre el mismo cuadro.
-    final cpp = _motor?.leer(
-      plano.bytes,
-      ancho: img.width,
-      alto: img.height,
-      bytesPorFila: plano.bytesPerRow,
-      formatoPixel: Platform.isAndroid ? FormatoPixel.luma : FormatoPixel.bgra,
-      formatos: grupo.mascaraMotor,
-      multiple: multiple,
-      presupuestoUs: presupuestoUs,
-      ronda: _ronda,
-    );
-    final ml = _mlkit?.processImage(mlkit.InputImage.fromBytes(
-      bytes: plano.bytes,
-      metadata: mlkit.InputImageMetadata(
-        size: sensor,
-        rotation: mlkit.InputImageRotationValue.fromRawValue(giro) ?? mlkit.InputImageRotation.rotation0deg,
-        format: Platform.isAndroid ? mlkit.InputImageFormat.nv21 : mlkit.InputImageFormat.bgra8888,
-        bytesPerRow: plano.bytesPerRow,
-      ),
-    ));
-
     final t0 = DateTime.now();
-    int? msCpp, msMl;
-    final esperaCpp = cpp?.then((v) {
-      msCpp = DateTime.now().difference(t0).inMilliseconds;
-      return v;
-    });
-    final esperaMl = ml?.then((v) {
-      msMl = DateTime.now().difference(t0).inMilliseconds;
-      return v;
-    });
     ResultadoMotor? r;
-    List<mlkit.Barcode> lm = const [];
     try {
-      r = await esperaCpp;
+      r = await _motor?.leer(
+        plano.bytes,
+        ancho: img.width,
+        alto: img.height,
+        bytesPorFila: plano.bytesPerRow,
+        formatoPixel: Platform.isAndroid ? FormatoPixel.luma : FormatoPixel.bgra,
+        formatos: grupo.mascaraMotor,
+        multiple: multiple || buscarTodos,
+        presupuestoUs: presupuestoUs,
+        ronda: _ronda,
+      );
     } catch (e) {
-      registrar('ERROR', 'motor C++: $e');
+      registrar('ERROR', 'motor: $e');
     }
-    try {
-      lm = await esperaMl ?? const [];
-    } catch (e) {
-      registrar('ERROR', 'ML Kit: $e');
-    }
-    if (r != null) _ronda = r.info.siguienteRonda;
-    ultimaInfo = r?.info ?? ultimaInfo;
+    final msIda = DateTime.now().difference(t0).inMilliseconds;
+    if (r == null) return;
+    _ronda = r.info.siguienteRonda;
+    ultimaInfo = r.info;
     if (!_tamanoRegistrado) {
       _tamanoRegistrado = true;
       registrar('CAMARA', 'cuadro ${img.width}x${img.height} fila=${plano.bytesPerRow} '
-          'planos=${img.planes.length} bytes=${plano.bytes.length}');
+          'planos=${img.planes.length} bytes=${plano.bytes.length} hilos_motor=${r.info.hilos}');
     }
     _procesados++;
-    if (msCpp != null) {
-      _msCppTotal += msCpp!;
-      if (msCpp! > _msCppMax) _msCppMax = msCpp!;
-    }
-    if (msMl != null) {
-      _msMlTotal += msMl!;
-      if (msMl! > _msMlMax) _msMlMax = msMl!;
-    }
-    if ((r?.codigos.isNotEmpty ?? false) || lm.isNotEmpty) _cuadrosConCodigo++;
+    final msMotor = r.info.microsegundos ~/ 1000;
+    _msMotorTotal += msMotor;
+    if (msMotor > _msMotorMax) _msMotorMax = msMotor;
+    _msIdaTotal += msIda;
+    if (msIda > _msIdaMax) _msIdaMax = msIda;
+    if (r.codigos.isNotEmpty) _cuadrosConCodigo++;
+    _leidosEnLapso += r.codigos.length;
     if (_reloj.elapsedMilliseconds >= 2000) _volcarEstadisticas();
 
-    final deCpp = [
-      for (final c in r?.codigos ?? const <CodigoMotor>[])
+    final codigos = [
+      for (final c in r.codigos)
         CodigoVisto(
           c.texto,
           Simbologia.deMotor(c.bitFormato)?.nombre ?? c.formato,
@@ -300,24 +262,11 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
           detalle: c.paso.nombre,
         ),
     ];
-    // ML Kit ya devuelve las esquinas en la imagen girada.
-    final deMlkit = [
-      for (final b in lm)
-        if (b.rawValue != null && b.rawValue!.isNotEmpty)
-          CodigoVisto(
-            b.rawValue!,
-            Simbologia.deMlkit(b.format)?.nombre ?? b.format.name,
-            [for (final p in b.cornerPoints) Offset(p.x.toDouble(), p.y.toDouble())],
-            simbologia: Simbologia.deMlkit(b.format),
-            fuente: 'ML Kit',
-          ),
-    ];
-    final ilegible = lm.any((b) => b.rawValue == null || b.rawValue!.isEmpty);
 
-    if (r != null) _linternaAutomatica(r.info);
+    _linternaAutomatica(r.info);
     if (!_capturas.isClosed && _encendida) {
-      _capturas.add(Captura(tamVertical(sensor, giro), _fusion.fusionar(deCpp, deMlkit),
-          info: r?.info, ilegible: ilegible));
+      _capturas.add(Captura(tamVertical(sensor, giro), _fusion.confirmar(codigos),
+          info: r.info, ilegible: r.info.ilegibles > 0));
     }
   }
 
@@ -327,13 +276,13 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       final i = ultimaInfo;
       registrar('CUADROS', 'en ${seg.toStringAsFixed(1)}s: recibidos=$_recibidos procesados=$_procesados '
           '(${(_procesados / seg).toStringAsFixed(1)}/s) con_codigo=$_cuadrosConCodigo '
-          'C++ prom=${_msCppTotal ~/ _procesados}ms max=${_msCppMax}ms '
-          'MLKit prom=${_msMlTotal ~/ _procesados}ms max=${_msMlMax}ms'
+          'codigos_leidos=$_leidosEnLapso motor prom=${_msMotorTotal ~/ _procesados}ms max=${_msMotorMax}ms '
+          'ida_y_vuelta prom=${_msIdaTotal ~/ _procesados}ms max=${_msIdaMax}ms'
           '${i == null ? '' : ' brillo=${i.brillo} contraste=${i.contraste} nitidez=${i.nitidez} reflejo=${i.quemados}%'} '
           'linterna=${linterna ? "si" : "no"} zoom=${aumento.toStringAsFixed(1)}');
     }
     _recibidos = _procesados = _cuadrosConCodigo = 0;
-    _msCppTotal = _msCppMax = _msMlTotal = _msMlMax = 0;
+    _msMotorTotal = _msMotorMax = _msIdaTotal = _msIdaMax = _leidosEnLapso = 0;
     _reloj
       ..reset()
       ..start();
@@ -375,7 +324,6 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     _cerrada = true;
     WidgetsBinding.instance.removeObserver(this);
     unawaited(apagar().whenComplete(() => _motor?.cerrar()));
-    unawaited(_mlkit?.close());
     unawaited(_capturas.close());
     super.dispose();
   }
