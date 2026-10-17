@@ -1,0 +1,1 @@
+zxing-cpp v3.1.1 (https://github.com/zxing-cpp/zxing-cpp, commit 287c85d), solo core/ sin libzint (escritura de codigos). Licencia Apache 2.0 (LICENSE).

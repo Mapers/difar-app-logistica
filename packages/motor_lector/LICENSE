@@ -1,0 +1,2 @@
+Codigo propio de DIFAR (src/motor_lector.*, src/preparar.*, lib/, test/).
+zxing-cpp (src/zxing-cpp/) se distribuye bajo Apache License 2.0: ver src/zxing-cpp/LICENSE.

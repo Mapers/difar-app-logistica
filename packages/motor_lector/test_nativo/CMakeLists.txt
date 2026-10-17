@@ -1,0 +1,16 @@
+# Banco de pruebas del motor en la PC (no se usa en la app).
+#   cmake -S . -B build -DZXING_DIR=/ruta/a/zxing-cpp && cmake --build build && ./build/banco
+cmake_minimum_required(VERSION 3.16)
+project(banco_motor_lector CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_BUILD_TYPE Release)
+set(BUILD_SHARED_LIBS OFF)
+set(ZXING_READERS ON)
+set(ZXING_WRITERS OLD CACHE STRING "" FORCE)
+set(ZXING_C_API OFF)
+set(ZXING_EXAMPLES OFF)
+add_subdirectory(${ZXING_DIR} zxing)
+add_executable(banco banco.cpp ../src/motor_lector.cpp ../src/preparar.cpp)
+target_include_directories(banco PRIVATE ../src)
+target_compile_options(banco PRIVATE -Wno-deprecated-declarations)
+target_link_libraries(banco ZXing::ZXing)
