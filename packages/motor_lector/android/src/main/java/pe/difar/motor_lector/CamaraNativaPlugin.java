@@ -45,7 +45,17 @@ import androidx.lifecycle.LifecycleOwner;
 
 import com.google.common.util.concurrent.ListenableFuture;
 
+import android.graphics.ImageFormat;
+import android.graphics.Rect;
+import android.graphics.YuvImage;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -97,6 +107,50 @@ public class CamaraNativaPlugin
   private int ronda;
   private volatile boolean verificando;
   private int analizados;
+
+  // Diagnostico: cuadros (en gris, JPEG) donde se ubico un codigo que no se
+  // pudo leer o cuya lectura no calzo con la imagen, para afinar el motor con
+  // imagenes reales. Se comparten junto con el registro. Hasta kMaxDiagnostico
+  // en total, como mucho uno cada 1,5 s.
+  private static final int kMaxDiagnostico = 12;
+  private long ultimoDiagnostico;
+  private final ExecutorService escritor = Executors.newSingleThreadExecutor();
+
+  private File carpetaDiagnostico() {
+    final File d = new File(contexto.getFilesDir(), "diagnostico");
+    if (!d.exists()) d.mkdirs();
+    return d;
+  }
+
+  private void guardarDiagnostico(ImageProxy img, String motor) {
+    final long ahora = SystemClock.elapsedRealtime();
+    if (ahora - ultimoDiagnostico < 1500) return;
+    final File carpeta = carpetaDiagnostico();
+    final String[] hay = carpeta.list((d, n) -> n.endsWith(".jpg"));
+    if (hay != null && hay.length >= kMaxDiagnostico) return;
+    ultimoDiagnostico = ahora;
+    final int w = img.getWidth(), h = img.getHeight();
+    final ImageProxy.PlaneProxy p = img.getPlanes()[0];
+    final ByteBuffer b = p.getBuffer().duplicate();
+    final int fila = p.getRowStride();
+    final byte[] nv21 = new byte[w * h * 3 / 2];
+    for (int y = 0; y < h; y++) {
+      b.position(y * fila);
+      b.get(nv21, y * w, w);
+    }
+    Arrays.fill(nv21, w * h, nv21.length, (byte) 128); // sin color
+    final String nombre = "cuadro_" + System.currentTimeMillis();
+    escritor.execute(() -> {
+      try (FileOutputStream f = new FileOutputStream(new File(carpeta, nombre + ".jpg"))) {
+        new YuvImage(nv21, ImageFormat.NV21, w, h, null).compressToJpeg(new Rect(0, 0, w, h), 92, f);
+      } catch (Exception ignorada) {
+      }
+      try (FileOutputStream f = new FileOutputStream(new File(carpeta, nombre + ".json"))) {
+        f.write(motor.getBytes(StandardCharsets.UTF_8));
+      } catch (Exception ignorada) {
+      }
+    });
+  }
 
   // Giroscopio: velocidad de giro del telefono (rad/s, suavizada). Moviendo
   // rapido, la imagen sale corrida: el motor no gasta los pasos dificiles.
@@ -208,6 +262,21 @@ public class CamaraNativaPlugin
           if (camara != null) camara.getCameraControl().cancelFocusAndMetering();
           r.success(null);
           break;
+        case "diagnostico": {
+          final List<String> rutas = new ArrayList<>();
+          final File[] archivos = carpetaDiagnostico().listFiles();
+          if (archivos != null)
+            for (File f : archivos) rutas.add(f.getAbsolutePath());
+          r.success(rutas);
+          break;
+        }
+        case "borrarDiagnostico": {
+          final File[] archivos = carpetaDiagnostico().listFiles();
+          if (archivos != null)
+            for (File f : archivos) f.delete();
+          r.success(null);
+          break;
+        }
         case "pausar":
           pausar(Boolean.TRUE.equals(llamada.argument("pausada")));
           r.success(null);
@@ -445,6 +514,7 @@ public class CamaraNativaPlugin
           formatos, giro > GIRO_MOVIENDO ? modo | MODO_MOVIENDO : modo, presupuestoUs, ronda);
       if (r == null) return;
       final String motor = new String(r, StandardCharsets.UTF_8);
+      if (motor.contains("\"v\":-1") || motor.contains("\"s\":1")) guardarDiagnostico(img, motor);
       ronda = numero(motor, "\"ronda\":", ronda);
       analizados++;
 

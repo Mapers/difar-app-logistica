@@ -441,7 +441,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       _primerVisto = null;
     }
     for (final d in _fusion.retenidos) {
-      registrar('DUDOSO', '${d.valor} ${d.formato} paso=${d.detalle}${d.rechazado ? ' no_calza_con_imagen (no se cuenta)' : ' (se cuenta si se repite en 3 s)'}');
+      registrar('DUDOSO', '${d.valor} ${d.formato} paso=${d.detalle}${d.rechazado ? ' no_calza_con_imagen' : ''} (se cuenta si se repite en 3 s)');
     }
     if (!_capturas.isClosed) {
       _capturas.add(Captura(tamVertical(sensor, giro), confirmados,

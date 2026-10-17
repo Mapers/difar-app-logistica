@@ -22,9 +22,8 @@ class CodigoVisto {
   /// EAN/UPC con los digitos comprobados contra los tonos de gris de la imagen.
   final bool verificado;
 
-  /// EAN/UPC cuyos digitos no calzaron con la imagen: no se cuenta (una
-  /// lectura falsa sobre una imagen quieta se repite cuadro a cuadro); queda
-  /// en el registro.
+  /// EAN/UPC cuyos digitos no calzaron con la imagen (solo para el
+  /// registro: en el telefono la verificacion rechazaba codigos reales).
   final bool rechazado;
 }
 
@@ -92,16 +91,13 @@ class Fusion {
 
   /// Se puede aceptar al primer cuadro: leido sobre la imagen original y con
   /// digito de control.
-  /// EAN/UPC: al instante si el motor lo verifico contra la imagen; si los
-  /// digitos no calzaron (en el telefono zxing leyo 4750412416093 de la caja
-  /// 7750082416093), se pide repetido; si no se pudo saber, vale la regla de
-  /// los demas (paso directo). En v0.14-v0.16 lo no verificado esperaba
-  /// siempre y en el telefono las lecturas reales se perdian (registro v0.16).
+  /// EAN/UPC: al instante si el motor lo verifico contra la imagen; si no,
+  /// cuando sale igual en 2 cuadros (a 15-30 cuadros/s son 50-100 ms). Asi
+  /// no entra una lectura falsa suelta (v0.13: 4750412416093 de la caja
+  /// 7750082416093). El "no calza" de la verificacion no bloquea: en el
+  /// telefono (v0.17) rechazaba casi todos los codigos reales.
   static bool esDirecto(CodigoVisto c) {
-    if (_eanUpc.contains(c.simbologia)) {
-      if (c.verificado) return true;
-      if (c.rechazado) return false;
-    }
+    if (_eanUpc.contains(c.simbologia)) return c.verificado;
     return _pasosDirectos.contains(c.detalle) && !(c.simbologia?.sinControl ?? false);
   }
 
@@ -121,7 +117,6 @@ class Fusion {
       final ok = decision[c.valor] ??= () {
         final anterior = _visto[c.valor];
         _visto[c.valor] = t;
-        if (c.rechazado) return false;
         final dudoso = !codigos.any((o) => o.valor == c.valor && esDirecto(o));
         return !dudoso || (anterior != null && t.difference(anterior) <= ventana);
       }();

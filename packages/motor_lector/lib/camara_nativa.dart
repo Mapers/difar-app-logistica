@@ -188,4 +188,10 @@ abstract final class CamaraNativa {
   static Future<void> reenfocar() => _canal.invokeMethod('reenfocar');
 
   static Future<void> pausar(bool pausada) => _canal.invokeMethod('pausar', {'pausada': pausada});
+
+  /// Cuadros de diagnostico guardados (JPEG en gris + JSON con lo que leyo el motor).
+  static Future<List<String>> archivosDiagnostico() async =>
+      (await _canal.invokeListMethod<String>('diagnostico')) ?? const [];
+
+  static Future<void> borrarDiagnostico() => _canal.invokeMethod('borrarDiagnostico');
 }

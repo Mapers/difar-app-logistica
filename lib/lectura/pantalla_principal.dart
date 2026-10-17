@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:motor_lector/camara_nativa.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../conteo/pantalla_conteo.dart';
 import '../core/proyeccion.dart';
@@ -358,11 +360,23 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No hay registro todavia.')));
       return;
     }
-    await compartirArchivo(archivo, 'Registro del lector DIFAR');
+    // Con el registro van los cuadros de diagnostico (codigos que no se leyeron).
+    var cuadros = <String>[];
+    try {
+      cuadros = await CamaraNativa.archivosDiagnostico();
+    } catch (_) {}
+    registrar('REGISTRO', 'compartido con ${cuadros.where((c) => c.endsWith('.jpg')).length} cuadros de diagnostico');
+    await SharePlus.instance.share(ShareParams(
+      files: [XFile(archivo.path, mimeType: 'text/plain'), for (final c in cuadros) XFile(c)],
+      subject: 'Registro del lector DIFAR',
+    ));
   }
 
   Future<void> _borrarRegistro() async {
     await Registro.instancia.borrar();
+    try {
+      await CamaraNativa.borrarDiagnostico();
+    } catch (_) {}
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Registro borrado.')));
   }

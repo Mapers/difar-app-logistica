@@ -102,19 +102,18 @@ void main() {
     }
   });
 
-  test('EAN rechazado por la imagen no se cuenta aunque se repita (falso del telefono v0.13)', () {
+  test('EAN no verificado espera a verse en 2 cuadros, aunque venga del paso rapido (falso del telefono v0.13)', () {
     final f = Fusion();
     final t0 = DateTime(2026, 10, 17, 6, 26, 15);
     expect(f.confirmar([codigo('4750412416093', Simbologia.ean13, 'C++', verificado: false, rechazado: true)], t0),
         isEmpty);
-    expect(f.confirmar([codigo('4750412416093', Simbologia.ean13, 'C++', verificado: false, rechazado: true)],
-        t0.add(const Duration(milliseconds: 100))), isEmpty);
-    expect(f.confirmar([codigo('7750082416093', Simbologia.ean13, 'C++')], t0).single.valor, '7750082416093');
-  });
-
-  test('EAN que no se pudo verificar entra al instante si viene del paso rapido (registro v0.16)', () {
-    final f = Fusion();
-    expect(f.confirmar([codigo('7750082416093', Simbologia.ean13, 'C++', verificado: false)]).single.valor,
+    // Un real que la verificacion rechaza igual entra al repetirse (registro v0.17).
+    expect(f.confirmar([codigo('7750082416093', Simbologia.ean13, 'C++', verificado: false, rechazado: true)], t0),
+        isEmpty);
+    expect(
+        f.confirmar([codigo('7750082416093', Simbologia.ean13, 'C++', verificado: false, rechazado: true)],
+            t0.add(const Duration(milliseconds: 40))).single.valor,
         '7750082416093');
   });
+
 }
