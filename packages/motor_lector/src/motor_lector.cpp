@@ -7,7 +7,9 @@
 #include "ReadBarcode.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cmath>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -94,7 +96,23 @@ struct Lectura {
   int paso;
   Afin aEntrada;
   bool invertido;
+  float cx = 0, cy = 0, largo = 0; // centro y lado mayor en la imagen de entrada
 };
+
+// Centro y lado mayor del codigo en la imagen de entrada.
+void medirEnEntrada(Lectura& l) {
+  const auto& pos = l.codigo.position();
+  float xs[4], ys[4];
+  for (int i = 0; i < 4; i++) {
+    xs[i] = l.aEntrada.a * pos[i].x + l.aEntrada.b * pos[i].y + l.aEntrada.tx;
+    ys[i] = l.aEntrada.c * pos[i].x + l.aEntrada.d * pos[i].y + l.aEntrada.ty;
+  }
+  l.cx = (xs[0] + xs[1] + xs[2] + xs[3]) / 4;
+  l.cy = (ys[0] + ys[1] + ys[2] + ys[3]) / 4;
+  l.largo = 0;
+  for (int i = 0; i < 4; i++)
+    l.largo = std::max(l.largo, std::hypot(xs[i] - xs[(i + 1) % 4], ys[i] - ys[(i + 1) % 4]));
+}
 
 struct Lector {
   BarcodeFormats formatos;
@@ -139,11 +157,18 @@ struct Lector {
         continue;
       }
       if (!confiable(b)) continue;
+      // Cada codigo fisico cuenta: dos cajas con el mismo EAN son dos lecturas.
+      // Es "el mismo" solo si ademas esta en el mismo lugar (lo leyeron dos pasos).
+      Lectura nueva{std::move(b), paso, t, invertido};
+      medirEnEntrada(nueva);
       const bool repetido = std::any_of(leidos.begin(), leidos.end(), [&](const Lectura& l) {
-        return l.codigo.text() == b.text() && Symbology(l.codigo.format()) == Symbology(b.format());
+        if (l.codigo.text() != nueva.codigo.text() || Symbology(l.codigo.format()) != Symbology(nueva.codigo.format()))
+          return false;
+        const float radio = 0.5f * std::max(l.largo, nueva.largo);
+        return std::hypot(l.cx - nueva.cx, l.cy - nueva.cy) < std::max(radio, 8.0f);
       });
       if (!repetido) {
-        leidos.push_back({std::move(b), paso, t, invertido});
+        leidos.push_back(std::move(nueva));
         hayUno = true;
         cuantos++;
         nuevos++;
@@ -250,6 +275,8 @@ struct Trabajo {
   }
 
   std::atomic<int> regiones{-1};
+  // Zonas donde OpenCV ve un codigo que no se pudo leer (para la marca ⚠️).
+  std::vector<std::array<float, 8>> sinLeer;
 
   // OpenCV ubica cada codigo 1D; cada uno se recorta, se endereza y se
   // decodifica por separado, en paralelo. Lee cualquier angulo y el costo
@@ -261,9 +288,11 @@ struct Trabajo {
     regiones = (int)qs.size();
     if (qs.empty()) return;
     std::atomic<int> siguiente{0};
+    std::vector<char> leidoK(qs.size(), 0);
     auto trabajar = [&] {
       for (int k; (k = siguiente++) < (int)qs.size();) {
         if (lector.listo()) return;
+        leidoK[k] = 1; // se corrige abajo si ningun intento lee
         auto rec = det::enderezar(zona(), zw, zh, fila, qs[k]);
         const Afin a{rec.a, rec.b, rec.c, rec.d, rec.tx + zx, rec.ty + zy};
         auto o = lector.opciones(false);
@@ -273,7 +302,10 @@ struct Trabajo {
         auto o2 = lector.opciones(true, true);
         o2.setMaxNumberOfSymbols(1);
         if (lector.leer(eq.vista(), o2, ML_PASO_DETECTOR_PREP, a) > 0) continue;
-        lector.leer(prep::invertir(eq.px.data(), eq.ancho, eq.alto, eq.ancho).vista(), o2, ML_PASO_DETECTOR_PREP, a, true);
+        if (lector.leer(prep::invertir(eq.px.data(), eq.ancho, eq.alto, eq.ancho).vista(), o2, ML_PASO_DETECTOR_PREP, a,
+                        true) > 0)
+          continue;
+        leidoK[k] = 0;
       }
     };
     const int n = std::min((int)qs.size(), std::max(1, hilosEnUso()));
@@ -281,7 +313,36 @@ struct Trabajo {
     for (int h = 1; h < n; h++) grupo.emplace_back(trabajar);
     trabajar();
     for (auto& g : grupo) g.join();
+
+    // Sin leer: ni sus intentos ni otro paso leyeron un codigo con centro en la zona.
+    std::lock_guard<std::mutex> l(lector.cerrojo);
+    for (size_t k = 0; k < qs.size(); k++) {
+      if (leidoK[k] || lector.listo()) continue;
+      std::array<float, 8> q;
+      for (int i = 0; i < 4; i++) {
+        q[i * 2] = qs[k][i * 2] + zx;
+        q[i * 2 + 1] = qs[k][i * 2 + 1] + zy;
+      }
+      const bool cubierto = std::any_of(lector.leidos.begin(), lector.leidos.end(), [&](const Lectura& r) {
+        return dentro(q, r.cx, r.cy);
+      });
+      if (!cubierto) sinLeer.push_back(q);
+    }
 #endif
+  }
+
+  // Punto dentro de un cuadrilatero convexo (mismo lado de los 4 bordes).
+  static bool dentro(const std::array<float, 8>& q, float x, float y) {
+    int signo = 0;
+    for (int i = 0; i < 4; i++) {
+      const float ax = q[i * 2], ay = q[i * 2 + 1], bx = q[(i + 1) % 4 * 2], by = q[(i + 1) % 4 * 2 + 1];
+      const float c = (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+      const int s = c > 0 ? 1 : (c < 0 ? -1 : 0);
+      if (s == 0) continue;
+      if (signo == 0) signo = s;
+      else if (s != signo) return false;
+    }
+    return true;
   }
 
   void hacer(int paso) {
@@ -472,9 +533,11 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
 
     // Copia de lo leido bajo el cerrojo: puede haber hilos todavia agregando.
     std::vector<Lectura> leidos;
+    std::vector<std::array<float, 8>> sinLeer;
     {
       std::lock_guard<std::mutex> l(t->lector.cerrojo);
       leidos = t->lector.leidos;
+      sinLeer = t->sinLeer;
     }
     int32_t escritos = 0;
     for (const auto& lec : leidos) {
@@ -492,6 +555,17 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
       }
       copiarTexto(c.nombre_formato, sizeof(c.nombre_formato), ToString(lec.codigo.format()));
       copiarTexto(c.texto, sizeof(c.texto), lec.codigo.text());
+    }
+    for (const auto& q : sinLeer) {
+      if (escritos >= max_salida) break;
+      ml_codigo& c = salida[escritos++];
+      std::memset(&c, 0, sizeof(ml_codigo));
+      c.sin_leer = 1;
+      c.paso = ML_PASO_DETECTOR;
+      for (int i = 0; i < 4; i++) {
+        c.x[i] = (int32_t)q[i * 2];
+        c.y[i] = (int32_t)q[i * 2 + 1];
+      }
     }
     info->microsegundos = usado();
     return escritos;

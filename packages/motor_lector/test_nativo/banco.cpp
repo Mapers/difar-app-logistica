@@ -228,7 +228,7 @@ int main() {
       ml_info info;
       int n = 0, cuadros = 0, ronda = 0, peorUs = 0, sumaUs = 0;
       std::string tiempos;
-      for (; cuadros < 12 && n == 0; cuadros++) {
+      for (; cuadros < 12 && (n == 0 || sal[0].sin_leer); cuadros++) {
         n = ml_leer(bytes.data(), W, H, W, ML_PIXEL_LUMA, 0, modoUno, presupuesto, ronda, sal, 4, &info);
         ronda = info.siguiente_ronda;
         peorUs = std::max(peorUs, info.microsegundos);
@@ -237,11 +237,13 @@ int main() {
           if (info.tiempo_paso_us[p]) tiempos += " " + std::to_string(p) + ":" + std::to_string(info.tiempo_paso_us[p] / 1000);
         tiempos += " |";
       }
-      bool okMotor = n > 0 && c.esperado == sal[0].texto;
+      int reales = 0;
+      for (int k = 0; k < n; k++) reales += !sal[k].sin_leer;
+      bool okMotor = reales > 0 && c.esperado == sal[0].texto;
       // Lectura falsa: devolvio un texto que no es el del codigo. Es el peor
       // error (cuenta un producto que no esta): el banco falla si hay alguna.
       for (int k = 0; k < n; k++)
-        if (c.esperado != sal[k].texto) {
+        if (!sal[k].sin_leer && c.esperado != sal[k].texto) {
           std::printf("  LECTURA FALSA: '%s' (paso %d) en vez de '%s'\n", sal[k].texto, sal[k].paso, c.esperado.c_str());
           falsos++;
         }
@@ -272,13 +274,15 @@ int main() {
   // girado un poco distinto (cajas en un pallet). Como el conteo multiple.
   {
     constexpr int GW = 1920, GH = 1080;
+    const bool danados = std::getenv("BANCO_DANADOS") && std::atoi(std::getenv("BANCO_DANADOS"));
     std::vector<float> img(GW * GH);
     std::mt19937 rng(11);
     std::normal_distribution<float> ruido(0, 5);
     for (int i = 0; i < GW * GH; i++) img[i] = 110 + ruido(rng);
     std::vector<std::string> esperados;
     for (int k = 0; k < 20; k++) {
-      std::string base = "77501820" + std::to_string(1000 + k * 37);
+      // 10 productos distintos, 2 cajas de cada uno: se deben contar las 20.
+      std::string base = "77501820" + std::to_string(1000 + (k % 10) * 37);
       base = base.substr(0, 12);
       int suma = 0;
       for (int i = 0; i < 12; i++) suma += (base[i] - '0') * (i % 2 ? 3 : 1);
@@ -294,7 +298,13 @@ int main() {
           if (X < 0 || Y < 0 || X >= GW || Y >= GH) continue;
           const int bx = x + bw / 2, by = y + bh / 2;
           const bool negro = bx >= 0 && by >= 0 && bx < bw && by < bh && bits.get(bx, by);
-          img[Y * GW + X] = (negro ? 20 : 235) + ruido(rng);
+          // BANCO_DANADOS=1: las cajas 3 y 14 con una mancha que tapa el centro
+          // de las barras (no se pueden leer): deben salir como "sin leer".
+          // Dano realista: rayas blancas finas cruzando las barras (etiqueta
+          // raspada). Se siguen viendo barras (OpenCV ubica el codigo) pero
+          // faltan pedazos de cada barra en todas las lineas.
+          const bool raspado = danados && (k == 3 || k == 14) && bx >= 0 && bx < bw && ((bx / 3) % 4 == 0);
+          img[Y * GW + X] = (raspado ? 235 : (negro ? 20 : 235)) + ruido(rng);
         }
     }
     std::vector<uint8_t> b(GW * GH);
@@ -310,26 +320,34 @@ int main() {
     std::vector<ml_codigo> sal(64);
     ml_info info;
     std::set<std::string> leidos;
-    int cuadros = 0, ms = 0, falsosV = 0;
-    for (; cuadros < 10 && (int)leidos.size() < 20; cuadros++) {
+    int cuadros = 0, ms = 0, falsosV = 0, instancias = 0, sinLeer = 0;
+    for (; cuadros < 10 && instancias < 20; cuadros++) {
+      instancias = 0;
+      sinLeer = 0;
       const int n = ml_leer(b.data(), GW, GH, GW, ML_PIXEL_LUMA, 0, ML_MODO_TODOS | ML_MODO_CUADRO_COMPLETO, 0, cuadros,
                             sal.data(), 64, &info);
       ms += info.microsegundos / 1000;
       for (int k = 0; k < n; k++) {
+        if (sal[k].sin_leer) {
+          sinLeer++;
+          continue;
+        }
         if (std::find(esperados.begin(), esperados.end(), sal[k].texto) == esperados.end()) {
           std::printf("  LECTURA FALSA (20 codigos): '%s' paso %d\n", sal[k].texto, sal[k].paso);
           falsosV++;
         } else {
           leidos.insert(sal[k].texto);
+          instancias++;
         }
       }
       std::string tiempos;
       for (int p = 1; p < ML_PASOS; p++)
         if (info.tiempo_paso_us[p]) tiempos += " " + std::to_string(p) + ":" + std::to_string(info.tiempo_paso_us[p] / 1000);
-      std::printf("  20 codigos, cuadro %d: %zu leidos, %d ms, detector ubico %d [%s ]\n", cuadros + 1, leidos.size(),
-                  info.microsegundos / 1000, info.regiones, tiempos.c_str());
+      std::printf("  20 cajas, cuadro %d: %d unidades (%zu productos), %d sin leer, %d ms, detector ubico %d [%s ]\n",
+                  cuadros + 1, instancias, leidos.size(), sinLeer, info.microsegundos / 1000, info.regiones, tiempos.c_str());
     }
-    std::printf("20 CODIGOS: %zu/20 en %d cuadros, %d ms en total, falsos %d\n", leidos.size(), cuadros, ms, falsosV);
+    std::printf("20 CAJAS (10 productos x 2): %d/20 unidades, %zu/10 productos, en %d cuadros, %d ms, falsos %d\n",
+                instancias, leidos.size(), cuadros, ms, falsosV);
     falsos += falsosV;
   }
 
@@ -364,6 +382,7 @@ int main() {
     for (int c = 0; c < 20; c++) {
       const int n = ml_leer(b.data(), W, H, W, ML_PIXEL_LUMA, 0, ML_MODO_TODOS, 0, c, sal, 8, &info);
       for (int k = 0; k < n; k++) {
+        if (sal[k].sin_leer) continue;
         std::printf("  LECTURA FALSA (texto/rayas): '%s' %s paso %d\n", sal[k].texto, sal[k].nombre_formato, sal[k].paso);
         falsosT++;
       }

@@ -54,9 +54,10 @@ void main() {
     final r = f.confirmar([
       codigo('7750182000123', Simbologia.ean13, 'C++'),
       codigo('7750182000124', Simbologia.ean13, 'C++'),
-      codigo('7750182000123', Simbologia.ean13, 'C++'), // repetido en el cuadro
+      codigo('7750182000123', Simbologia.ean13, 'C++'), // otra caja con el mismo EAN
     ]);
-    expect(r.map((c) => c.valor), ['7750182000123', '7750182000124']);
+    // Cada caja fisica es una lectura: dos cajas iguales salen las dos.
+    expect(r.map((c) => c.valor), ['7750182000123', '7750182000124', '7750182000123']);
   });
 
   test('sensor girado 90: punto de la imagen horizontal a la vertical', () {

@@ -75,17 +75,18 @@ class Fusion {
     final t = ahora ?? DateTime.now();
     final aceptados = <CodigoVisto>[];
     final dudosos = <CodigoVisto>[];
-    final yaEnCuadro = <String>{};
+    // Se decide por valor y se devuelven todas sus instancias (cada caja
+    // fisica es una lectura: dos cajas con el mismo EAN son dos).
+    final decision = <String, bool>{};
     for (final c in codigos) {
-      if (!yaEnCuadro.add(c.valor)) continue;
-      final anterior = _visto[c.valor];
-      _visto[c.valor] = t;
-      final dudoso = (c.simbologia?.sinControl ?? false) || !_pasosDirectos.contains(c.detalle);
-      if (!dudoso || (anterior != null && t.difference(anterior) <= ventana)) {
-        aceptados.add(c);
-      } else {
-        dudosos.add(c);
-      }
+      final ok = decision[c.valor] ??= () {
+        final anterior = _visto[c.valor];
+        _visto[c.valor] = t;
+        final directo = codigos.any((o) => o.valor == c.valor && _pasosDirectos.contains(o.detalle));
+        final dudoso = (c.simbologia?.sinControl ?? false) || !directo;
+        return !dudoso || (anterior != null && t.difference(anterior) <= ventana);
+      }();
+      (ok ? aceptados : dudosos).add(c);
     }
     retenidos = dudosos;
     if (_visto.length > 500) _visto.removeWhere((_, v) => t.difference(v) > ventana);

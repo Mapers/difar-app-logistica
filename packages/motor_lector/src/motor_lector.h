@@ -65,6 +65,7 @@ typedef struct {
   int32_t y[4];
   char nombre_formato[32];
   char texto[1024];
+  int32_t sin_leer;     // 1: OpenCV ve un codigo ahi pero no se pudo leer (texto vacio)
 } ml_codigo;
 
 typedef struct {

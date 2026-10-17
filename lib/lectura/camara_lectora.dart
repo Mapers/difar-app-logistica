@@ -13,7 +13,7 @@ import 'fusion.dart';
 
 /// Lo que se vio en un cuadro.
 class Captura {
-  Captura(this.imagen, this.codigos, {this.info, this.ilegible = false});
+  Captura(this.imagen, this.codigos, {this.info, this.ilegible = false, this.sinLeer = const []});
 
   /// Tamano de la imagen en vertical (las esquinas estan en este espacio).
   final Size imagen;
@@ -24,6 +24,10 @@ class Captura {
 
   /// El motor encontro un codigo pero fallo su verificacion (danado).
   final bool ilegible;
+
+  /// Zonas (4 esquinas, en vertical) donde OpenCV ve un codigo que no se
+  /// pudo leer: marca "acercate".
+  final List<List<Offset>> sinLeer;
 }
 
 /// Camara + motor de lectura propio (C++: zxing-cpp + preparacion de imagen),
@@ -237,9 +241,26 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
 
   // ------------------------------------------------------------ cuadros
 
+  /// Imagen congelada (revision de un disparo de conteo): no se procesa nada.
+  bool congelada = false;
+
+  Future<void> congelar() async {
+    congelada = true;
+    try {
+      await _control?.pausePreview();
+    } catch (_) {}
+  }
+
+  Future<void> descongelar() async {
+    try {
+      await _control?.resumePreview();
+    } catch (_) {}
+    congelada = false;
+  }
+
   void _alCuadro(CameraImage img) {
     _recibidos++;
-    if (_procesando || !_encendida) return;
+    if (_procesando || !_encendida || congelada) return;
     _procesando = true;
     _procesar(img).catchError((Object e) => debugPrint('Lector: $e')).whenComplete(() => _procesando = false);
   }
@@ -264,7 +285,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
         formatos: grupo.mascaraMotor,
         modo: (multiple ? ModoMotor.todos | ModoMotor.cuadroCompleto : 0) |
             (buscarTodos ? ModoMotor.todos : 0) |
-            (esfuerzo || multiple ? ModoMotor.intercalar : ModoMotor.soloRapido),
+            (esfuerzo ? ModoMotor.intercalar : ModoMotor.soloRapido),
         presupuestoUs: presupuestoUs,
         ronda: _ronda,
       );
@@ -301,9 +322,14 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     _leidosEnLapso += r.codigos.length;
     if (_reloj.elapsedMilliseconds >= 2000) _volcarEstadisticas();
 
+    final sinLeer = [
+      for (final c in r.codigos)
+        if (c.sinLeer) [for (final p in c.esquinas) aVertical(Offset(p.$1, p.$2), sensor, giro)],
+    ];
     final codigos = [
       for (final c in r.codigos)
-        CodigoVisto(
+        if (!c.sinLeer)
+          CodigoVisto(
           c.texto,
           Simbologia.deMotor(c.bitFormato)?.nombre ?? c.formato,
           [for (final p in c.esquinas) aVertical(Offset(p.$1, p.$2), sensor, giro)],
@@ -326,7 +352,8 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       registrar('DUDOSO', '${d.valor} ${d.formato} paso=${d.detalle} (se cuenta si se repite en el cuadro siguiente)');
     }
     if (!_capturas.isClosed && _encendida) {
-      _capturas.add(Captura(tamVertical(sensor, giro), confirmados, info: r.info, ilegible: r.info.ilegibles > 0));
+      _capturas.add(Captura(tamVertical(sensor, giro), confirmados,
+          info: r.info, ilegible: r.info.ilegibles > 0, sinLeer: sinLeer));
     }
   }
 

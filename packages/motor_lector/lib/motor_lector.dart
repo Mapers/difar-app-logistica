@@ -80,9 +80,13 @@ class CodigoMotor {
     required this.paso,
     required this.invertido,
     required this.esquinas,
+    this.sinLeer = false,
   });
 
   final String texto;
+
+  /// OpenCV ve un codigo en [esquinas] pero no se pudo leer ([texto] vacio).
+  final bool sinLeer;
 
   /// Nombre del formato segun zxing ("EAN-13", "Code 128", "QR Code"...).
   final String formato;
@@ -164,6 +168,8 @@ final class _MlCodigo extends Struct {
   external Array<Uint8> nombreFormato;
   @Array(1024)
   external Array<Uint8> texto;
+  @Int32()
+  external int sinLeer;
 }
 
 final class _MlInfo extends Struct {
@@ -292,6 +298,7 @@ ResultadoMotor leerCuadro(
           paso: PasoMotor.values[c.paso.clamp(0, PasoMotor.values.length - 1)],
           invertido: c.invertido != 0,
           esquinas: [for (var k = 0; k < 4; k++) (c.x[k].toDouble(), c.y[k].toDouble())],
+          sinLeer: c.sinLeer != 0,
         );
       }(),
   ];
