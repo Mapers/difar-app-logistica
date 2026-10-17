@@ -1,39 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../core/codigos.dart';
-import 'ajustes.dart';
-
-/// Camara configurada para leer rapido:
-/// * solo los formatos del grupo elegido (menos trabajo por cuadro);
-/// * `DetectionSpeed.unrestricted`: analiza todos los cuadros, los repetidos
-///   los filtra [SesionLectura], asi un codigo nuevo se lee al instante;
-/// * 1280x720 (Android usa 640x480 de fabrica: no alcanza para codigos chicos
-///   o lejanos); 1920x1080 en conteo multiple, donde cada codigo sale mas chico.
-MobileScannerController crearCamara(Ajustes ajustes, {bool multiple = false, bool autoStart = true}) {
-  return MobileScannerController(
-    autoStart: autoStart,
-    formats: ajustes.grupo.formatos,
-    detectionSpeed: DetectionSpeed.unrestricted,
-    cameraResolution: multiple ? const Size(1920, 1080) : const Size(1280, 720),
-    autoZoom: ajustes.autoZoom,
-  );
-}
-
-/// Un codigo visto en el ultimo cuadro.
-class CodigoVisto {
-  CodigoVisto(this.valor, this.formato, this.esquinas);
-
-  final String valor;
-  final String formato;
-  final List<Offset> esquinas;
-}
-
-List<CodigoVisto> codigosDe(BarcodeCapture captura) => [
-      for (final b in captura.barcodes)
-        if (b.rawValue != null && b.rawValue!.isNotEmpty)
-          CodigoVisto(b.rawValue!, nombreFormato(b.format), b.corners),
-    ];
 
 class BotonSobreCamara extends StatelessWidget {
   const BotonSobreCamara({super.key, required this.icono, required this.tooltip, required this.onPressed});
@@ -51,29 +18,6 @@ class BotonSobreCamara extends StatelessWidget {
       color: Colors.white,
       visualDensity: VisualDensity.compact,
       style: IconButton.styleFrom(backgroundColor: Colors.black45),
-    );
-  }
-}
-
-class ErrorCamara extends StatelessWidget {
-  const ErrorCamara({super.key, required this.error});
-
-  final MobileScannerException error;
-
-  @override
-  Widget build(BuildContext context) {
-    final texto = error.errorCode == MobileScannerErrorCode.permissionDenied
-        ? 'Sin permiso de camara. Activalo en Ajustes del telefono > Apps > DIFAR Logistica.'
-        : 'No se pudo abrir la camara (${error.errorCode.name}).';
-    return ColoredBox(
-      color: Colors.black,
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Text(texto,
-              textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 12)),
-        ),
-      ),
     );
   }
 }

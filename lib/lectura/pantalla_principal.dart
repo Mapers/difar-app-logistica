@@ -1,12 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../core/proyeccion.dart';
 import 'ajustes.dart';
 import 'aviso_lectura.dart';
 import 'camara_comun.dart';
+import 'camara_lectora.dart';
+import 'fusion.dart';
 import 'pantalla_ajustes.dart';
 import 'pantalla_lista.dart';
 import 'pantalla_multi.dart';
@@ -38,8 +39,12 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
   static const _esperaToque = Duration(seconds: 3);
   static const _paraMantener = Duration(milliseconds: 300);
 
-  late MobileScannerController _camara = crearCamara(_ajustes);
-  String _configCamara = '';
+  late final CamaraLectora _camara = CamaraLectora(_ajustes);
+  StreamSubscription<Captura>? _capturas;
+
+  /// Consejo sobre la camara ("inclina el telefono", "linterna encendida").
+  String? _consejo;
+  Timer? _quitarConsejo;
 
   bool _armado = false;
   bool _sostenido = false;
@@ -70,21 +75,39 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
   @override
   void initState() {
     super.initState();
-    _configCamara = _firmaCamara();
+    _capturas = _camara.capturas.listen(_alDetectar);
+    _camara.addListener(_alCambiarCamara);
+    unawaited(_camara.iniciar());
     _programarApagado();
   }
 
   @override
   void dispose() {
-    for (final t in [_finToque, _detectarMantener, _apagar, _limpiarMarcas, _quitarResaltado, _quitarError]) {
+    for (final t in [_finToque, _detectarMantener, _apagar, _limpiarMarcas, _quitarResaltado, _quitarError, _quitarConsejo]) {
       t?.cancel();
     }
+    unawaited(_capturas?.cancel());
+    _camara.removeListener(_alCambiarCamara);
+    _camara.dispose();
     _cuadro.dispose();
-    unawaited(_camara.dispose());
     super.dispose();
   }
 
-  String _firmaCamara() => '${_ajustes.grupo.name}/${_ajustes.autoZoom}';
+  void _alCambiarCamara() {
+    if (_camara.linternaAutomatica) {
+      _camara.linternaAutomatica = false;
+      _mostrarConsejo('Poca luz: linterna encendida');
+    }
+  }
+
+  void _mostrarConsejo(String texto) {
+    if (!mounted) return;
+    setState(() => _consejo = texto);
+    _quitarConsejo?.cancel();
+    _quitarConsejo = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _consejo = null);
+    });
+  }
 
   // ---------------------------------------------------------------- disparo
 
@@ -152,7 +175,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
     _apagar?.cancel();
     if (_apagada && !_ocupada) {
       setState(() => _apagada = false);
-      unawaited(_camara.start());
+      unawaited(_camara.iniciar());
     }
   }
 
@@ -162,15 +185,15 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
       if (!mounted || _armado || _ocupada) return;
       setState(() => _apagada = true);
       _cuadro.value = null;
-      unawaited(_camara.pause());
+      unawaited(_camara.apagar());
     });
   }
 
   // ---------------------------------------------------------------- lectura
 
-  void _alDetectar(BarcodeCapture captura) {
-    final vistos = codigosDe(captura);
-    final apuntado = indiceApuntado([for (final v in vistos) v.esquinas], captura.size, _tamVista);
+  void _alDetectar(Captura captura) {
+    final vistos = captura.codigos;
+    final apuntado = indiceApuntado([for (final v in vistos) v.esquinas], captura.imagen, _tamVista);
 
     ResultadoLectura? leido;
     if (_armado && apuntado != null) {
@@ -190,20 +213,23 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
           _alLeer(v.valor, ResultadoLectura.sumado);
         }
       }
-    } else if (_armado && !_leyoEnDisparo && apuntado == null && _hayIlegible(captura)) {
+    } else if (_armado && !_leyoEnDisparo && apuntado == null && captura.ilegible) {
       // La camara ve un codigo pero no puede decodificar su contenido.
       _leyoEnDisparo = true; // un solo aviso por disparo
       _noSeLeyo('Codigo ilegible');
       if (!_sostenido) _desarmar();
     }
 
-    _cuadro.value = _Cuadro(captura.size, vistos, apuntado, leido);
+    // Reflejo fuerte mientras se intenta leer: ninguna preparacion recupera
+    // barras quemadas, hay que cambiar el angulo.
+    if (_armado && leido == null && (captura.info?.quemados ?? 0) >= 8 && _consejo == null) {
+      _mostrarConsejo('Reflejo: inclina un poco el telefono');
+    }
+
+    _cuadro.value = _Cuadro(captura.imagen, vistos, apuntado, leido);
     _limpiarMarcas?.cancel();
     _limpiarMarcas = Timer(const Duration(milliseconds: 350), () => _cuadro.value = null);
   }
-
-  bool _hayIlegible(BarcodeCapture captura) =>
-      captura.barcodes.any((b) => b.rawValue == null || b.rawValue!.isEmpty);
 
   void _alLeer(String valor, ResultadoLectura r) {
     _leyoEnDisparo = true;
@@ -226,20 +252,15 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
   Future<void> _abrir(Widget pantalla) async {
     _ocupada = true;
     _desarmar();
-    await _camara.stop();
+    _cuadro.value = null;
+    await _camara.apagar();
     if (!mounted) return;
     await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => pantalla));
     if (!mounted) return;
     _ocupada = false;
-    if (_firmaCamara() != _configCamara) {
-      // Formatos o autozoom cambiaron en Ajustes: se fijan al crear la camara.
-      final vieja = _camara;
-      setState(() => _camara = crearCamara(_ajustes));
-      _configCamara = _firmaCamara();
-      await vieja.dispose();
-    } else {
-      await _camara.start();
-    }
+    // Al volver toma los ajustes nuevos (formatos, motor).
+    await _camara.iniciar();
+    if (!mounted) return;
     setState(() => _apagada = false);
     _programarApagado();
   }
@@ -335,12 +356,7 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
         return Stack(
           fit: StackFit.expand,
           children: [
-            MobileScanner(
-              key: ObjectKey(_camara),
-              controller: _camara,
-              onDetect: _alDetectar,
-              errorBuilder: (context, error) => ErrorCamara(error: error),
-            ),
+            VistaCamara(camara: _camara),
             IgnorePointer(
               child: ValueListenableBuilder(
                 valueListenable: _cuadro,
@@ -359,15 +375,27 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
             Positioned(
               top: 4,
               left: 4,
-              child: ValueListenableBuilder(
-                valueListenable: _camara,
-                builder: (context, estado, _) => BotonSobreCamara(
-                  icono: estado.torchState == TorchState.on ? Icons.flash_on : Icons.flash_off,
+              child: ListenableBuilder(
+                listenable: _camara,
+                builder: (context, _) => BotonSobreCamara(
+                  icono: _camara.linterna ? Icons.flash_on : Icons.flash_off,
                   tooltip: 'Linterna',
-                  onPressed: estado.torchState == TorchState.unavailable ? null : _camara.toggleTorch,
+                  onPressed: _camara.lista ? _camara.cambiarLinterna : null,
                 ),
               ),
             ),
+            if (_consejo != null)
+              Positioned(
+                left: 6,
+                right: 6,
+                bottom: 40,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(6)),
+                  child: Text(_consejo!,
+                      textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 11)),
+                ),
+              ),
             Positioned(
               top: 4,
               right: 4,
@@ -380,12 +408,12 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
             Positioned(
               bottom: 4,
               right: 4,
-              child: ValueListenableBuilder(
-                valueListenable: _camara,
-                builder: (context, estado, _) {
-                  final cerca = estado.zoomScale > 0.1;
+              child: ListenableBuilder(
+                listenable: _camara,
+                builder: (context, _) {
+                  final cerca = _camara.aumento > 1.2;
                   return TextButton(
-                    onPressed: () => _camara.setZoomScale(cerca ? 0 : 0.4),
+                    onPressed: () => _camara.fijarAumento(cerca ? 1 : 2),
                     style: TextButton.styleFrom(
                       backgroundColor: Colors.black45,
                       foregroundColor: Colors.white,

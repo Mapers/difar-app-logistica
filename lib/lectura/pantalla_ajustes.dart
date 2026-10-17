@@ -52,12 +52,25 @@ class PantallaAjustes extends StatelessWidget {
               ),
               trailing: Text('${(ajustes.esperaMs / 1000).toStringAsFixed(1)} s'),
             ),
+            const _Titulo('Motor de lectura'),
+            RadioGroup<MotorLectura>(
+              groupValue: ajustes.motor,
+              onChanged: (v) {
+                if (v != null) ajustes.motor = v;
+              },
+              child: Column(
+                children: [
+                  for (final m in MotorLectura.values)
+                    RadioListTile<MotorLectura>(value: m, title: Text(m.etiqueta), subtitle: Text(m.descripcion)),
+                ],
+              ),
+            ),
             const _Titulo('Camara y avisos'),
             SwitchListTile(
-              title: const Text('Autozoom'),
-              subtitle: const Text('Acerca la camara si el codigo esta lejos (Android).'),
-              value: ajustes.autoZoom,
-              onChanged: (v) => ajustes.autoZoom = v,
+              title: const Text('Linterna automatica'),
+              subtitle: const Text('Se enciende sola cuando hay poca luz.'),
+              value: ajustes.linternaAuto,
+              onChanged: (v) => ajustes.linternaAuto = v,
             ),
             SwitchListTile(
               title: const Text('Pitido'),

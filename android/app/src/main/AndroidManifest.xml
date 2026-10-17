@@ -1,6 +1,9 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- Vibracion al leer y al fallar (canal difar/pitido en MainActivity). -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- El plugin de camara pide microfono (video); esta app no graba: se quita. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove" />
     <application
         android:label="DIFAR Logistica"
         android:name="${applicationName}"

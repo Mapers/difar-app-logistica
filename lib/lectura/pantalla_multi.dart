@@ -1,12 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../core/proyeccion.dart';
 import 'ajustes.dart';
 import 'aviso_lectura.dart';
 import 'camara_comun.dart';
+import 'camara_lectora.dart';
+import 'fusion.dart';
 import 'sesion_lectura.dart';
 
 /// Conteo multiple, como MatrixScan Count de Scandit: camara a pantalla
@@ -25,7 +26,13 @@ class PantallaMulti extends StatefulWidget {
 }
 
 class _PantallaMultiState extends State<PantallaMulti> {
-  late final MobileScannerController _camara = crearCamara(widget.ajustes, multiple: true);
+  late final CamaraLectora _camara = CamaraLectora(widget.ajustes, multiple: true);
+  StreamSubscription<Captura>? _capturas;
+
+  /// Lo visto en los ultimos [_memoria]: cada cuadro (y cada motor) puede
+  /// traer un grupo algo distinto; juntarlos evita que las marcas parpadeen.
+  static const _memoria = Duration(milliseconds: 400);
+  final _recientes = <String, (CodigoVisto, DateTime)>{};
 
   /// Contados en este conteo (aunque ya estuvieran en la lista de antes).
   final _contados = <String>{};
@@ -36,16 +43,30 @@ class _PantallaMultiState extends State<PantallaMulti> {
   Timer? _ocultarLote;
 
   @override
+  void initState() {
+    super.initState();
+    _capturas = _camara.capturas.listen(_alDetectar);
+    unawaited(_camara.iniciar());
+  }
+
+  @override
   void dispose() {
     _limpiar?.cancel();
     _ocultarLote?.cancel();
+    unawaited(_capturas?.cancel());
+    _camara.dispose();
     _cuadro.dispose();
-    unawaited(_camara.dispose());
     super.dispose();
   }
 
-  void _alDetectar(BarcodeCapture captura) {
-    _cuadro.value = _CuadroMulti(captura.size, codigosDe(captura));
+  void _alDetectar(Captura captura) {
+    final ahora = DateTime.now();
+    for (final c in captura.codigos) {
+      _recientes[c.valor] = (c, ahora);
+    }
+    _recientes.removeWhere((_, v) => ahora.difference(v.$2) > _memoria);
+    if (_recientes.isEmpty) return; // el temporizador borra las marcas
+    _cuadro.value = _CuadroMulti(captura.imagen, [for (final v in _recientes.values) v.$1]);
     _limpiar?.cancel();
     _limpiar = Timer(const Duration(milliseconds: 400), () => _cuadro.value = null);
     if (_auto) _contarVisibles();
@@ -96,12 +117,7 @@ class _PantallaMultiState extends State<PantallaMulti> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          MobileScanner(
-            controller: _camara,
-            onDetect: _alDetectar,
-            tapToFocus: true,
-            errorBuilder: (context, error) => ErrorCamara(error: error),
-          ),
+          VistaCamara(camara: _camara),
           IgnorePointer(
             child: ValueListenableBuilder(
               valueListenable: _cuadro,
@@ -176,12 +192,12 @@ class _PantallaMultiState extends State<PantallaMulti> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          ValueListenableBuilder(
-            valueListenable: _camara,
-            builder: (context, estado, _) => BotonSobreCamara(
-              icono: estado.torchState == TorchState.on ? Icons.flash_on : Icons.flash_off,
+          ListenableBuilder(
+            listenable: _camara,
+            builder: (context, _) => BotonSobreCamara(
+              icono: _camara.linterna ? Icons.flash_on : Icons.flash_off,
               tooltip: 'Linterna',
-              onPressed: estado.torchState == TorchState.unavailable ? null : _camara.toggleTorch,
+              onPressed: _camara.lista ? _camara.cambiarLinterna : null,
             ),
           ),
           Semantics(
