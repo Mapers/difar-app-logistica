@@ -17,10 +17,11 @@ constexpr int kLargo = 400;
 constexpr int kPesosEsperados = (32 * 7 + 32) + (32 * 32 * 5 + 32) + (64 * 32 * 5 + 64) + 2 * (64 * 64 * 3 + 64) +
                                 (256 * 1600 + 256) + (131 * 256 + 131);
 
-// Umbrales medidos con perfiles sinteticos de validacion (ver el banco).
+// Umbrales medidos con 25600 perfiles sinteticos nuevos (calibrar.py): leen
+// el 50,7% de los casos dificiles con 0 lecturas equivocadas.
 constexpr float kMinEsEan = 0.9f;
-constexpr float kMinDigito = 0.6f;
-constexpr float kMinMargen = 2.0f; // log: la segunda combinacion valida es >7 veces menos probable
+constexpr float kMinDigito = 0.9f;
+constexpr float kMinMargen = 3.0f; // log: la segunda combinacion valida es >20 veces menos probable
 
 const std::vector<float>& pesos() {
   static std::vector<float> p;
