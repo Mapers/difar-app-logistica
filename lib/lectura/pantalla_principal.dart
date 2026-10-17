@@ -1,0 +1,448 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
+
+import '../core/proyeccion.dart';
+import 'ajustes.dart';
+import 'aviso_lectura.dart';
+import 'camara_comun.dart';
+import 'pantalla_ajustes.dart';
+import 'pantalla_lista.dart';
+import 'pantalla_multi.dart';
+import 'sesion_lectura.dart';
+
+/// Pantalla principal, como SparkScan de Scandit: la lista ocupa la pantalla,
+/// la camara es una ventanita flotante (se agranda con un toque) y un boton
+/// redondo grande dispara la lectura:
+/// * tocar = lee UN codigo (aunque sea el mismo de recien: cada toque cuenta);
+/// * mantener presionado = lee seguido mientras se mantiene, sin repetir el
+///   mismo codigo hasta que pase la espera de Ajustes.
+/// Si hay varios codigos a la vista se lee solo el apuntado (el mas cercano al
+/// centro); los demas se marcan "No escaneado".
+///
+/// La camara queda encendida para que el primer toque lea al instante; se
+/// apaga sola tras [_apagarTras] sin usar el boton y se enciende al tocarlo.
+class PantallaPrincipal extends StatefulWidget {
+  const PantallaPrincipal({super.key, required this.sesion, required this.ajustes});
+
+  final SesionLectura sesion;
+  final Ajustes ajustes;
+
+  @override
+  State<PantallaPrincipal> createState() => _PantallaPrincipalState();
+}
+
+class _PantallaPrincipalState extends State<PantallaPrincipal> {
+  static const _apagarTras = Duration(seconds: 30);
+  static const _esperaToque = Duration(seconds: 4);
+  static const _paraMantener = Duration(milliseconds: 300);
+
+  late MobileScannerController _camara = crearCamara(_ajustes);
+  String _configCamara = '';
+
+  bool _armado = false;
+  bool _sostenido = false;
+  bool _dedoAbajo = false;
+  bool _apagada = false;
+  bool _grande = false;
+  bool _ocupada = false; // otra pantalla usa la camara
+  String? _resaltado;
+
+  Timer? _finToque;
+  Timer? _detectarMantener;
+  Timer? _apagar;
+  Timer? _limpiarMarcas;
+  Timer? _quitarResaltado;
+
+  Size _tamVista = Size.zero;
+  final _cuadro = ValueNotifier<_Cuadro?>(null);
+
+  Ajustes get _ajustes => widget.ajustes;
+  SesionLectura get _sesion => widget.sesion;
+
+  @override
+  void initState() {
+    super.initState();
+    _configCamara = _firmaCamara();
+    _programarApagado();
+  }
+
+  @override
+  void dispose() {
+    for (final t in [_finToque, _detectarMantener, _apagar, _limpiarMarcas, _quitarResaltado]) {
+      t?.cancel();
+    }
+    _cuadro.dispose();
+    unawaited(_camara.dispose());
+    super.dispose();
+  }
+
+  String _firmaCamara() => '${_ajustes.grupo.name}/${_ajustes.autoZoom}';
+
+  // ---------------------------------------------------------------- disparo
+
+  void _alPresionar() {
+    _dedoAbajo = true;
+    _encender();
+    setState(() {
+      _armado = true;
+      _sostenido = false;
+    });
+    _finToque?.cancel();
+    _detectarMantener?.cancel();
+    _detectarMantener = Timer(_paraMantener, () {
+      if (_dedoAbajo && mounted) setState(() => _sostenido = true);
+    });
+  }
+
+  void _alSoltar() {
+    _dedoAbajo = false;
+    _detectarMantener?.cancel();
+    if (_sostenido) {
+      _desarmar();
+    } else if (_armado) {
+      // Toque corto: queda esperando un codigo unos segundos.
+      _finToque = Timer(_esperaToque, _desarmar);
+    }
+  }
+
+  void _desarmar() {
+    _finToque?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _armado = false;
+      _sostenido = false;
+    });
+    _programarApagado();
+  }
+
+  void _encender() {
+    _apagar?.cancel();
+    if (_apagada && !_ocupada) {
+      setState(() => _apagada = false);
+      unawaited(_camara.start());
+    }
+  }
+
+  void _programarApagado() {
+    _apagar?.cancel();
+    _apagar = Timer(_apagarTras, () {
+      if (!mounted || _armado || _ocupada) return;
+      setState(() => _apagada = true);
+      _cuadro.value = null;
+      unawaited(_camara.pause());
+    });
+  }
+
+  // ---------------------------------------------------------------- lectura
+
+  void _alDetectar(BarcodeCapture captura) {
+    final vistos = codigosDe(captura);
+    final apuntado = indiceApuntado([for (final v in vistos) v.esquinas], captura.size, _tamVista);
+
+    ResultadoLectura? leido;
+    if (_armado && apuntado != null) {
+      final v = vistos[apuntado];
+      _sesion.espera = Duration(milliseconds: _ajustes.esperaMs);
+      leido = _sesion.registrar(v.valor, v.formato, DateTime.now(),
+          sumarRepetidos: _ajustes.sumarRepetidos,
+          // Cada toque es intencional: cuenta aunque sea el mismo de recien.
+          forzar: !_sostenido);
+      if (leido == ResultadoLectura.ignorado) {
+        leido = null;
+      } else {
+        _alLeer(v.valor, leido);
+      }
+    }
+
+    _cuadro.value = _Cuadro(captura.size, vistos, apuntado, leido);
+    _limpiarMarcas?.cancel();
+    _limpiarMarcas = Timer(const Duration(milliseconds: 350), () => _cuadro.value = null);
+  }
+
+  void _alLeer(String valor, ResultadoLectura r) {
+    unawaited(AvisoLectura.leido(
+      sonido: _ajustes.sonido,
+      vibrar: _ajustes.vibrar,
+      repetido: r == ResultadoLectura.sumado,
+    ));
+    setState(() => _resaltado = valor);
+    _quitarResaltado?.cancel();
+    _quitarResaltado = Timer(const Duration(milliseconds: 900), () {
+      if (mounted) setState(() => _resaltado = null);
+    });
+    if (!_sostenido) _desarmar();
+  }
+
+  // ---------------------------------------------------------------- navegacion
+
+  /// Libera la camara mientras otra pantalla la usa y la retoma al volver.
+  Future<void> _abrir(Widget pantalla) async {
+    _ocupada = true;
+    _desarmar();
+    await _camara.stop();
+    if (!mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => pantalla));
+    if (!mounted) return;
+    _ocupada = false;
+    if (_firmaCamara() != _configCamara) {
+      // Formatos o autozoom cambiaron en Ajustes: se fijan al crear la camara.
+      final vieja = _camara;
+      setState(() => _camara = crearCamara(_ajustes));
+      _configCamara = _firmaCamara();
+      await vieja.dispose();
+    } else {
+      await _camara.start();
+    }
+    setState(() => _apagada = false);
+    _programarApagado();
+  }
+
+  Future<void> _ingresoManual() async {
+    final codigo = await showDialog<String>(context: context, builder: (_) => const DialogoManual());
+    if (codigo == null || codigo.isEmpty) return;
+    _sesion.registrar(codigo, 'Manual', DateTime.now(), forzar: true);
+    setState(() => _resaltado = codigo);
+  }
+
+  // ---------------------------------------------------------------- vista
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: ListenableBuilder(
+          listenable: _sesion,
+          builder: (context, _) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('DIFAR Logistica'),
+              Text(
+                '${_sesion.items.length} codigos · ${_sesion.totalUnidades} unidades',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Conteo multiple',
+            onPressed: () => _abrir(PantallaMulti(sesion: _sesion, ajustes: _ajustes)),
+            icon: const Icon(Icons.grid_view),
+          ),
+          PopupMenuButton<String>(
+            onSelected: (op) => switch (op) {
+              'manual' => _ingresoManual(),
+              'csv' => compartirCsv(_sesion),
+              'vaciar' => confirmarVaciar(context, _sesion),
+              _ => _abrir(PantallaAjustes(ajustes: _ajustes)),
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'manual', child: Text('Ingresar codigo a mano')),
+              PopupMenuItem(value: 'csv', child: Text('Compartir CSV')),
+              PopupMenuItem(value: 'vaciar', child: Text('Vaciar lista')),
+              PopupMenuItem(value: 'ajustes', child: Text('Ajustes')),
+            ],
+          ),
+        ],
+      ),
+      body: LayoutBuilder(builder: (context, c) {
+        final ancho = _grande ? c.maxWidth - 24 : c.maxWidth * 0.42;
+        final alto = _grande ? c.maxHeight * 0.5 : ancho;
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: ListaLecturas(
+                sesion: _sesion,
+                resaltado: _resaltado,
+                // Que la ultima fila no quede bajo el boton.
+                relleno: const EdgeInsets.only(bottom: 120),
+              ),
+            ),
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOut,
+              top: 12,
+              right: 12,
+              width: ancho,
+              height: alto,
+              child: _ventanaCamara(),
+            ),
+            Positioned(right: 20, bottom: 28, child: _botonDisparo()),
+          ],
+        );
+      }),
+    );
+  }
+
+  Widget _ventanaCamara() {
+    return Material(
+      elevation: 8,
+      color: Colors.black,
+      borderRadius: BorderRadius.circular(16),
+      clipBehavior: Clip.antiAlias,
+      child: LayoutBuilder(builder: (context, c) {
+        _tamVista = c.biggest;
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            MobileScanner(
+              key: ObjectKey(_camara),
+              controller: _camara,
+              onDetect: _alDetectar,
+              errorBuilder: (context, error) => ErrorCamara(error: error),
+            ),
+            IgnorePointer(
+              child: ValueListenableBuilder(
+                valueListenable: _cuadro,
+                builder: (context, cuadro, _) =>
+                    CustomPaint(painter: _MarcasApuntado(cuadro, armado: _armado)),
+              ),
+            ),
+            if (_apagada)
+              GestureDetector(
+                onTap: _encender,
+                child: const ColoredBox(
+                  color: Color(0xFF3A3A3A),
+                  child: Center(child: Icon(Icons.qr_code_scanner, color: Colors.white54, size: 36)),
+                ),
+              ),
+            Positioned(
+              top: 4,
+              left: 4,
+              child: ValueListenableBuilder(
+                valueListenable: _camara,
+                builder: (context, estado, _) => BotonSobreCamara(
+                  icono: estado.torchState == TorchState.on ? Icons.flash_on : Icons.flash_off,
+                  tooltip: 'Linterna',
+                  onPressed: estado.torchState == TorchState.unavailable ? null : _camara.toggleTorch,
+                ),
+              ),
+            ),
+            Positioned(
+              top: 4,
+              right: 4,
+              child: BotonSobreCamara(
+                icono: _grande ? Icons.close_fullscreen : Icons.open_in_full,
+                tooltip: _grande ? 'Achicar' : 'Agrandar',
+                onPressed: () => setState(() => _grande = !_grande),
+              ),
+            ),
+            Positioned(
+              bottom: 4,
+              right: 4,
+              child: ValueListenableBuilder(
+                valueListenable: _camara,
+                builder: (context, estado, _) {
+                  final cerca = estado.zoomScale > 0.1;
+                  return TextButton(
+                    onPressed: () => _camara.setZoomScale(cerca ? 0 : 0.4),
+                    style: TextButton.styleFrom(
+                      backgroundColor: Colors.black45,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(40, 32),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    child: Text(cerca ? '2x' : '1x'),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      }),
+    );
+  }
+
+  Widget _botonDisparo() {
+    final colores = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      label: 'Escanear. Toca para leer un codigo, manten presionado para leer seguido.',
+      child: Listener(
+        onPointerDown: (_) => _alPresionar(),
+        onPointerUp: (_) => _alSoltar(),
+        onPointerCancel: (_) => _alSoltar(),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: 88,
+          height: 88,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: _armado ? colores.primary : const Color(0xFF6E6E6E),
+            border: Border.all(
+              color: _sostenido ? Colors.greenAccent : Colors.white,
+              width: _armado ? 5 : 3,
+            ),
+            boxShadow: const [BoxShadow(blurRadius: 10, color: Colors.black38, offset: Offset(0, 4))],
+          ),
+          child: const Icon(Icons.barcode_reader, color: Colors.white, size: 38),
+        ),
+      ),
+    );
+  }
+}
+
+class _Cuadro {
+  _Cuadro(this.imagen, this.vistos, this.apuntado, this.leido);
+
+  final Size imagen;
+  final List<CodigoVisto> vistos;
+  final int? apuntado;
+  final ResultadoLectura? leido;
+}
+
+/// Marca el codigo apuntado (blanco; verde/ambar al leerlo) y, si hay mas de
+/// uno, deja los otros en gris con "No escaneado".
+class _MarcasApuntado extends CustomPainter {
+  _MarcasApuntado(this.cuadro, {required this.armado});
+
+  final _Cuadro? cuadro;
+  final bool armado;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = cuadro;
+    if (c == null) return;
+    for (var i = 0; i < c.vistos.length; i++) {
+      final puntos = proyectarACubrir(c.vistos[i].esquinas, c.imagen, size);
+      if (puntos.length < 4) continue;
+      final esApuntado = i == c.apuntado;
+      final color = !esApuntado
+          ? Colors.white38
+          : switch (c.leido) {
+              ResultadoLectura.nuevo => Colors.greenAccent,
+              ResultadoLectura.sumado => Colors.amber,
+              _ => armado ? Colors.white : Colors.white70,
+            };
+      final forma = Path()..addPolygon(puntos, true);
+      if (esApuntado && c.leido != null) {
+        canvas.drawPath(forma, Paint()..color = color.withValues(alpha: 0.35));
+      }
+      canvas.drawPath(
+        forma,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = esApuntado ? 3 : 1.5,
+      );
+      if (!esApuntado && c.vistos.length > 1) _etiqueta(canvas, puntos, 'No escaneado');
+    }
+  }
+
+  void _etiqueta(Canvas canvas, List<Offset> puntos, String texto) {
+    final tp = TextPainter(
+      text: TextSpan(text: texto, style: const TextStyle(color: Colors.white, fontSize: 9)),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final centro = centroDe(puntos);
+    final caja = Rect.fromCenter(center: centro, width: tp.width + 8, height: tp.height + 4);
+    canvas.drawRRect(RRect.fromRectAndRadius(caja, const Radius.circular(4)), Paint()..color = Colors.black54);
+    tp.paint(canvas, caja.topLeft + const Offset(4, 2));
+    tp.dispose();
+  }
+
+  @override
+  bool shouldRepaint(_MarcasApuntado old) => old.cuadro != cuadro || old.armado != armado;
+}

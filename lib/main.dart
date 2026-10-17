@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'lectura/ajustes.dart';
-import 'lectura/pantalla_escaner.dart';
+import 'lectura/pantalla_principal.dart';
 import 'lectura/sesion_lectura.dart';
 
 Future<void> main() async {
@@ -32,7 +32,7 @@ class AppLogistica extends StatelessWidget {
         brightness: Brightness.dark,
         useMaterial3: true,
       ),
-      home: PantallaEscaner(sesion: sesion, ajustes: ajustes),
+      home: PantallaPrincipal(sesion: sesion, ajustes: ajustes),
     );
   }
 }

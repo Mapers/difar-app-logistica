@@ -3,17 +3,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/codigos.dart';
 
-enum ModoLectura {
-  unoAUno('Uno a uno', 'Se detiene tras cada codigo; toca "Leer otro" para seguir.'),
-  continuo('Continuo', 'Sigue leyendo sin tocar la pantalla, un codigo a la vez dentro del recuadro.'),
-  multi('Multi', 'Lee todos los codigos visibles a la vez (estanteria, caja con varias etiquetas).');
-
-  const ModoLectura(this.etiqueta, this.descripcion);
-
-  final String etiqueta;
-  final String descripcion;
-}
-
 /// Preferencias del escaner, guardadas en el telefono.
 class Ajustes extends ChangeNotifier {
   Ajustes(this._prefs);
@@ -25,12 +14,6 @@ class Ajustes extends ChangeNotifier {
         orElse: () => GrupoFormatos.logistica,
       );
   set grupo(GrupoFormatos v) => _set(() => _prefs?.setString('grupo', v.name));
-
-  ModoLectura get modo => ModoLectura.values.firstWhere(
-        (m) => m.name == _prefs?.getString('modo'),
-        orElse: () => ModoLectura.continuo,
-      );
-  set modo(ModoLectura v) => _set(() => _prefs?.setString('modo', v.name));
 
   /// Si un codigo ya leido vuelve a pasar, suma 1 a su cantidad.
   bool get sumarRepetidos => _prefs?.getBool('sumar') ?? true;

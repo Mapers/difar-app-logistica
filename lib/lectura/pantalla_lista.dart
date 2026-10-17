@@ -6,41 +6,48 @@ import 'package:share_plus/share_plus.dart';
 
 import 'sesion_lectura.dart';
 
-/// Codigos leidos en la sesion: editar cantidades, borrar y compartir en CSV.
-class PantallaLista extends StatelessWidget {
-  const PantallaLista({super.key, required this.sesion});
+final _hora = DateFormat('dd/MM HH:mm:ss');
+
+Future<void> compartirCsv(SesionLectura sesion) async {
+  final nombre = 'lectura_${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.csv';
+  await SharePlus.instance.share(ShareParams(
+    files: [XFile.fromData(utf8.encode(sesion.aCsv()), mimeType: 'text/csv', name: nombre)],
+    fileNameOverrides: [nombre],
+    subject: 'Lectura de codigos DIFAR',
+  ));
+}
+
+Future<void> confirmarVaciar(BuildContext context, SesionLectura sesion) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Vaciar la lista'),
+      content: const Text('Se borran todos los codigos leidos. No se puede deshacer.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Vaciar')),
+      ],
+    ),
+  );
+  if (ok == true) sesion.vaciar();
+}
+
+/// Codigos leidos: el ultimo arriba (resaltado un momento), sumar/restar,
+/// tocar para escribir la cantidad, deslizar para borrar.
+class ListaLecturas extends StatelessWidget {
+  const ListaLecturas({
+    super.key,
+    required this.sesion,
+    this.resaltado,
+    this.relleno = EdgeInsets.zero,
+  });
 
   final SesionLectura sesion;
 
-  static final _hora = DateFormat('dd/MM HH:mm:ss');
+  /// Codigo recien leido, se pinta de otro color.
+  final String? resaltado;
 
-  Future<void> _compartir(BuildContext context) async {
-    final nombre = 'lectura_${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.csv';
-    await SharePlus.instance.share(ShareParams(
-      files: [XFile.fromData(
-        utf8.encode(sesion.aCsv()),
-        mimeType: 'text/csv',
-        name: nombre,
-      )],
-      fileNameOverrides: [nombre],
-      subject: 'Lectura de codigos DIFAR',
-    ));
-  }
-
-  Future<void> _vaciar(BuildContext context) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Vaciar la lista'),
-        content: const Text('Se borran todos los codigos leidos. No se puede deshacer.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Vaciar')),
-        ],
-      ),
-    );
-    if (ok == true) sesion.vaciar();
-  }
+  final EdgeInsets relleno;
 
   Future<void> _editarCantidad(BuildContext context, ItemLeido item) async {
     final texto = TextEditingController(text: '${item.cantidad}');
@@ -74,64 +81,60 @@ class PantallaLista extends StatelessWidget {
       listenable: sesion,
       builder: (context, _) {
         final items = sesion.items;
-        return Scaffold(
-          appBar: AppBar(
-            title: Text('${items.length} codigos · ${sesion.totalUnidades} u.'),
-            actions: [
-              IconButton(
-                tooltip: 'Compartir CSV',
-                onPressed: items.isEmpty ? null : () => _compartir(context),
-                icon: const Icon(Icons.ios_share),
+        if (items.isEmpty) {
+          return Padding(
+            padding: relleno,
+            child: const Center(
+              child: Text('Toca el boton para escanear.\nManten presionado para leer seguido.',
+                  textAlign: TextAlign.center),
+            ),
+          );
+        }
+        final colores = Theme.of(context).colorScheme;
+        return ListView.separated(
+          padding: relleno,
+          itemCount: items.length,
+          separatorBuilder: (_, __) => const Divider(height: 1),
+          itemBuilder: (context, i) {
+            final item = items[i];
+            return Dismissible(
+              key: ValueKey(item.codigo),
+              direction: DismissDirection.endToStart,
+              background: Container(
+                color: colores.error,
+                alignment: Alignment.centerRight,
+                padding: const EdgeInsets.only(right: 24),
+                child: const Icon(Icons.delete, color: Colors.white),
               ),
-              IconButton(
-                tooltip: 'Vaciar',
-                onPressed: items.isEmpty ? null : () => _vaciar(context),
-                icon: const Icon(Icons.delete_sweep),
-              ),
-            ],
-          ),
-          body: items.isEmpty
-              ? const Center(child: Text('Todavia no hay codigos leidos.'))
-              : ListView.separated(
-                  itemCount: items.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (context, i) {
-                    final item = items[i];
-                    return Dismissible(
-                      key: ValueKey(item.codigo),
-                      direction: DismissDirection.endToStart,
-                      background: Container(
-                        color: Theme.of(context).colorScheme.error,
-                        alignment: Alignment.centerRight,
-                        padding: const EdgeInsets.only(right: 24),
-                        child: const Icon(Icons.delete, color: Colors.white),
+              onDismissed: (_) => sesion.eliminar(item.codigo),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                color: item.codigo == resaltado ? colores.primaryContainer : Colors.transparent,
+                child: ListTile(
+                  title: Text(item.codigo,
+                      style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w600)),
+                  subtitle: Text('${item.formato} · ${_hora.format(item.ultimaLectura)}'),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: 'Restar',
+                        onPressed: () => sesion.cambiarCantidad(item.codigo, item.cantidad - 1),
+                        icon: const Icon(Icons.remove_circle_outline),
                       ),
-                      onDismissed: (_) => sesion.eliminar(item.codigo),
-                      child: ListTile(
-                        title: Text(item.codigo,
-                            style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w600)),
-                        subtitle: Text('${item.formato} · ${_hora.format(item.ultimaLectura)}'),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              tooltip: 'Restar',
-                              onPressed: () => sesion.cambiarCantidad(item.codigo, item.cantidad - 1),
-                              icon: const Icon(Icons.remove_circle_outline),
-                            ),
-                            Text('${item.cantidad}', style: Theme.of(context).textTheme.titleMedium),
-                            IconButton(
-                              tooltip: 'Sumar',
-                              onPressed: () => sesion.cambiarCantidad(item.codigo, item.cantidad + 1),
-                              icon: const Icon(Icons.add_circle_outline),
-                            ),
-                          ],
-                        ),
-                        onTap: () => _editarCantidad(context, item),
+                      Text('${item.cantidad}', style: Theme.of(context).textTheme.titleMedium),
+                      IconButton(
+                        tooltip: 'Sumar',
+                        onPressed: () => sesion.cambiarCantidad(item.codigo, item.cantidad + 1),
+                        icon: const Icon(Icons.add_circle_outline),
                       ),
-                    );
-                  },
+                    ],
+                  ),
+                  onTap: () => _editarCantidad(context, item),
                 ),
+              ),
+            );
+          },
         );
       },
     );

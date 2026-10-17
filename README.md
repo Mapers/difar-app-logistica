@@ -4,34 +4,41 @@ App de escaneo continuo al estilo Scandit, hecha con
 [`mobile_scanner`](https://pub.dev/packages/mobile_scanner) (Google ML Kit en
 Android, Apple Vision en iOS). Gratis y sin licencia por dispositivo.
 
-## Que hace
+## Que hace (como en el video de Scandit)
 
-- **Tres modos** (selector arriba en la camara):
-  - **Uno a uno**: se detiene tras cada lectura ("Leer otro" para seguir).
-  - **Continuo**: un codigo a la vez dentro del recuadro, sin tocar nada.
-  - **Multi** (como MatrixScan de Scandit): lee **todos los codigos visibles a
-    la vez** en el mismo cuadro, los marca encima de la imagen con su cantidad
-    (verde = recien contado, ambar = sumado, azul = ya contado) y cuenta cada
-    uno una sola vez mientras siga a la vista. Usa 1920x1080 para que los
-    codigos chicos de una estanteria o caja se lean.
-- **Lectura continua**: apuntas y lee; no hay que tocar la pantalla. Pitido +
-  vibracion en cada lectura (verde = nuevo, ambar = repetido sumado).
-- **Conteo**: agrupa por codigo y suma cantidades. Mantener la etiqueta frente
-  a la camara **no** la cuenta dos veces (espera configurable, 1.5 s por defecto).
-- **Lista**: sumar/restar/editar cantidad, deslizar para borrar, vaciar y
-  **compartir CSV** (separado por `;`, abre directo en Excel). La lista se
-  guarda en el telefono y no se pierde al cerrar la app.
-- Linterna, zoom, toque para enfocar, autozoom (Android), ingreso manual con
-  validacion del digito verificador GS1 (EAN/UPC/GTIN).
+**Pantalla principal = lista (SparkScan):**
+- La lista de codigos ocupa la pantalla; la camara es una **ventanita
+  flotante** arriba a la derecha (boton para agrandarla/achicarla, linterna,
+  zoom 1x/2x).
+- **Boton redondo grande** abajo a la derecha:
+  - **tocar** = lee UN codigo (cada toque cuenta, aunque sea el mismo);
+  - **mantener presionado** = lee seguido mientras se mantiene.
+- **Pitido + vibracion** en cada lectura (pitido nativo, sin demora; si el
+  volumen multimedia esta en 0 suena por el de notificaciones).
+- Con varios codigos a la vista lee **solo el apuntado** (el mas cercano al
+  centro, recuadro blanco -> verde al leer); los demas salen "No escaneado".
+- La fila leida se resalta arriba de la lista; sumar/restar/editar cantidad,
+  deslizar para borrar. Menu: ingreso manual (valida digito GS1), compartir
+  CSV, vaciar, ajustes. La lista se guarda en el telefono.
+- La camara queda encendida para que el primer toque lea al instante y se
+  apaga sola tras 30 s sin usar el boton.
+
+**Conteo multiple (MatrixScan Count)** — icono de cuadricula arriba:
+- Camara a pantalla completa con un **punto sobre cada codigo visible**.
+- El **disparador cuenta todos los codigos a la vista de una vez** (pallet,
+  estanteria, caja con varias etiquetas): pasan a verde con check y no se
+  vuelven a contar. Un pitido por lote y "+N" en pantalla.
+- Barra de progreso contados/a la vista, total del conteo y "Auto" para
+  contar sin tocar el disparador. Usa 1920x1080 para codigos chicos.
 
 ## Por que es rapida
 
 | Tecnica | Donde |
 |---|---|
 | Solo se decodifican los formatos del grupo elegido (Productos, Logistica 1D, 2D o Todos) | `lib/core/codigos.dart` |
-| Solo se analiza la ventana de lectura (`scanWindow`), no todo el cuadro | `lib/lectura/pantalla_escaner.dart` |
-| `DetectionSpeed.unrestricted`: analiza todos los cuadros; los repetidos los filtra la sesion | `lib/lectura/sesion_lectura.dart` |
-| Resolucion 1280x720 (Android usa 640x480 por defecto: no alcanza para codigos chicos o lejanos) | `pantalla_escaner.dart` |
+| `DetectionSpeed.unrestricted`: analiza todos los cuadros; los repetidos los filtra la sesion | `lib/lectura/camara_comun.dart` |
+| Resolucion 1280x720 (Android usa 640x480 por defecto: no alcanza para codigos chicos o lejanos); 1920x1080 en multiple | `camara_comun.dart` |
+| Camara ya encendida al tocar el boton (sin esperar a que arranque) | `lib/lectura/pantalla_principal.dart` |
 | Pitido nativo (ToneGenerator / AudioServices) sin demora de carga | `MainActivity.kt`, `AppDelegate.swift` |
 
 ## Correrlo
@@ -51,14 +58,15 @@ Android minimo: 6.0 (API 23). iOS: el permiso de camara ya esta en `Info.plist`.
 lib/
   main.dart                     arranque, tema, carga de ajustes y sesion
   core/codigos.dart             grupos de formatos, nombres, digito GS1
-  core/proyeccion.dart          esquinas del codigo (imagen) -> pantalla (BoxFit.cover)
+  core/proyeccion.dart          esquinas imagen -> pantalla, codigo apuntado
   lectura/
-    pantalla_escaner.dart       camara, modos, ventana, laser, marcas Multi, linterna, zoom
-    sesion_lectura.dart         lista de lecturas, anti-repetidos, CSV, guardado
-    ajustes.dart                preferencias (SharedPreferences)
-    pantalla_ajustes.dart       pantalla de ajustes
-    pantalla_lista.dart         lista, cantidades, compartir CSV
-    aviso_lectura.dart          pitido + vibracion
+    pantalla_principal.dart     lista + camara flotante + boton (SparkScan)
+    pantalla_multi.dart         conteo multiple (MatrixScan Count)
+    camara_comun.dart           configuracion de camara y widgets comunes
+    pantalla_lista.dart         lista de lecturas, CSV, vaciar
+    sesion_lectura.dart         lecturas, anti-repetidos, CSV, guardado
+    ajustes.dart / pantalla_ajustes.dart
+    aviso_lectura.dart          pitido + vibracion (canal nativo difar/pitido)
 ```
 
 ## Siguientes pasos posibles
