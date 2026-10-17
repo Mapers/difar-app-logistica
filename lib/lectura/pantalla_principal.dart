@@ -458,6 +458,18 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
               child: _ventanaCamara(),
             ),
             Positioned(right: 20, bottom: 28, child: _botonDisparo()),
+            // Varias cajas a la vez, camara a pantalla completa (como los SDK
+            // comerciales); al terminar se agregan a la lista.
+            Positioned(
+              left: 16,
+              bottom: 40,
+              child: FloatingActionButton.extended(
+                heroTag: 'varios',
+                onPressed: () => _abrir(PantallaConteo(sesion: _sesion, ajustes: _ajustes, sinLista: true)),
+                icon: const Icon(Icons.qr_code_scanner),
+                label: const Text('Escanear varios'),
+              ),
+            ),
           ],
         );
       }),

@@ -27,11 +27,15 @@ class PantallaConteo extends StatefulWidget {
     required this.sesion,
     required this.ajustes,
     this.fuente = const FuenteSimulada(),
+    this.sinLista = false,
   });
 
   final SesionLectura sesion;
   final Ajustes ajustes;
   final FuenteEsperados fuente;
+
+  /// "Escanear varios": empieza directo, sin elegir lista (cuenta todo lo que ve).
+  final bool sinLista;
 
   @override
   State<PantallaConteo> createState() => _PantallaConteoState();
@@ -83,6 +87,14 @@ class _PantallaConteoState extends State<PantallaConteo> {
   }
 
   Future<void> _elegirLista() async {
+    if (widget.sinLista) {
+      registrar('CONTEO', 'inicio escanear varios (sin lista)');
+      setState(() {
+        _conteo = Conteo()..addListener(_alCambiarConteo);
+        _eligiendo = false;
+      });
+      return;
+    }
     final listas = await widget.fuente.listas();
     if (!mounted) return;
     final elegida = await showModalBottomSheet<Object>(
@@ -363,7 +375,7 @@ class _PantallaConteoState extends State<PantallaConteo> {
             children: [
               const BackButton(color: Colors.white),
               Expanded(
-                child: Text(lista?.nombre ?? 'Conteo',
+                child: Text(lista?.nombre ?? (widget.sinLista ? 'Escanear varios' : 'Conteo'),
                     style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
               ),
               if (conteo != null)

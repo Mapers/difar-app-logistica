@@ -19,4 +19,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Falta'), findsOneWidget);
   });
+
+  testWidgets('escanear varios: empieza directo, sin elegir lista', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final a = Ajustes(await SharedPreferences.getInstance());
+    await tester.pumpWidget(MaterialApp(home: PantallaConteo(sesion: SesionLectura(), ajustes: a, sinLista: true)));
+    await tester.pumpAndSettle();
+    expect(find.text('Pedido 1001 (simulado)'), findsNothing);
+    expect(find.text('Escanear varios'), findsOneWidget);
+    expect(find.textContaining('Ver ('), findsOneWidget);
+  });
 }
