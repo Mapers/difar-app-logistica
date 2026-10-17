@@ -28,5 +28,8 @@ void main() {
     expect(find.text('Pedido 1001 (simulado)'), findsNothing);
     expect(find.text('Escanear varios'), findsOneWidget);
     expect(find.textContaining('Ver ('), findsOneWidget);
+    // El registro escribe en lotes con un temporizador: se deja terminar.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 3));
   });
 }
