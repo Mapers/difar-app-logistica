@@ -19,7 +19,7 @@ class PantallaAjustes extends StatelessWidget {
             const _Titulo('Que codigos leer'),
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16),
-              child: Text('Mientras menos formatos, mas rapida la lectura.'),
+              child: Text('Automatico reconoce cualquier tipo de codigo. Limitar formatos solo si hace falta mas velocidad.'),
             ),
             RadioGroup<GrupoFormatos>(
               groupValue: ajustes.grupo,

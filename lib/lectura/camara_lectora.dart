@@ -175,6 +175,14 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  static bool _conOpenCV() {
+    try {
+      return motorConOpenCV();
+    } catch (_) {
+      return false;
+    }
+  }
+
   static String _tam(Size? s) => s == null ? '?' : '${s.width.toInt()}x${s.height.toInt()}';
 
   Future<void> cambiarLinterna([bool? encender]) async {
@@ -194,6 +202,11 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
       await _control?.setZoomLevel(aumento);
     } catch (_) {}
   }
+
+  /// Enfoca y mide la luz en el centro (al disparar, y de nuevo si la imagen
+  /// sigue borrosa): en el telefono los codigos se leian recien cuando la
+  /// imagen salia nitida.
+  Future<void> enfocarCentro() => enfocar(const Offset(0.5, 0.5));
 
   /// [punto] normalizado (0..1) sobre la vista previa.
   Future<void> enfocar(Offset punto) async {
@@ -232,7 +245,7 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
         formatos: grupo.mascaraMotor,
         modo: (multiple ? ModoMotor.todos | ModoMotor.cuadroCompleto : 0) |
             (buscarTodos ? ModoMotor.todos : 0) |
-            (esfuerzo || multiple ? 0 : ModoMotor.soloRapido),
+            (esfuerzo || multiple ? ModoMotor.intercalar : ModoMotor.soloRapido),
         presupuestoUs: presupuestoUs,
         ronda: _ronda,
       );
@@ -246,7 +259,8 @@ class CamaraLectora extends ChangeNotifier with WidgetsBindingObserver {
     if (!_tamanoRegistrado) {
       _tamanoRegistrado = true;
       registrar('CAMARA', 'cuadro ${img.width}x${img.height} fila=${plano.bytesPerRow} '
-          'planos=${img.planes.length} bytes=${plano.bytes.length} hilos_motor=${r.info.hilos}');
+          'planos=${img.planes.length} bytes=${plano.bytes.length} hilos_motor=${r.info.hilos} '
+          'opencv=${_conOpenCV() ? "si" : "no"}');
     }
     _procesados++;
     final msMotor = r.info.microsegundos ~/ 1000;

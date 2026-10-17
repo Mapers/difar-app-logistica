@@ -35,3 +35,6 @@ migrate_working_dir/
 # Rutas locales del SDK y compilacion nativa
 android/local.properties
 android/.cxx/
+
+# OpenCV compilado por scripts/preparar_opencv.sh (no va al repo)
+third_party/

@@ -62,4 +62,11 @@ void main() {
         simbologia: Simbologia.ean13);
     expect(tamanoCodigo(c), 'largo=190px (2.0 px/barra)');
   });
+
+  test('Code 128 tambien se confirma en 2 cuadros; lo ubicado por OpenCV sin preparar entra enseguida', () {
+    final f = Fusion();
+    expect(f.confirmar([codigo(r'$1PJN7B$0', Simbologia.code128, 'C++')]), isEmpty);
+    expect(f.confirmar([codigo('7750182000123', Simbologia.ean13, 'C++', paso: 'detector')]).single.valor,
+        '7750182000123');
+  });
 }

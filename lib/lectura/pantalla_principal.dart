@@ -64,6 +64,10 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
   /// Momento en que se toco el boton (para medir cuanto tarda la lectura).
   final _desdeToque = Stopwatch();
 
+  /// Imagen borrosa sostenida mientras se busca: se vuelve a enfocar.
+  int _cuadrosBorrosos = 0;
+  DateTime _ultimoEnfoque = DateTime.now();
+
   Timer? _finToque;
   Timer? _detectarMantener;
   Timer? _apagar;
@@ -126,6 +130,9 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
     });
     _leyoEnDisparo = false;
     _camara.esfuerzo = true; // todos los pasos del motor mientras se busca
+    _cuadrosBorrosos = 0;
+    _ultimoEnfoque = DateTime.now();
+    unawaited(_camara.enfocarCentro());
     _desdeToque
       ..reset()
       ..start();
@@ -254,6 +261,21 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
       if (!_sostenido) _desarmar();
     }
 
+    // Borrosa varios cuadros seguidos mientras se busca: enfocar de nuevo el
+    // centro y pedir quietud (la nitidez sube a 7-9 cuando se lee).
+    if (_armado && leidos.isEmpty) {
+      final n = captura.info?.nitidez ?? 10;
+      _cuadrosBorrosos = n <= 4 ? _cuadrosBorrosos + 1 : 0;
+      final ahora = DateTime.now();
+      if (_cuadrosBorrosos >= 8 && ahora.difference(_ultimoEnfoque) > const Duration(milliseconds: 1200)) {
+        _cuadrosBorrosos = 0;
+        _ultimoEnfoque = ahora;
+        unawaited(_camara.enfocarCentro());
+        if (_consejo == null) _mostrarConsejo('Enfocando: manten quieto el telefono');
+        registrar('ENFOQUE', 'imagen borrosa (nitidez $n): enfocar el centro de nuevo');
+      }
+    }
+
     // Reflejo fuerte mientras se intenta leer: ninguna preparacion recupera
     // barras quemadas, hay que cambiar el angulo.
     if (_armado && leido == null && (captura.info?.quemados ?? 0) >= 8 && _consejo == null) {
@@ -274,7 +296,8 @@ class _PantallaPrincipalState extends State<PantallaPrincipal> {
         '(${_sostenido ? "mantener" : "toque"}) a_la_vista=${captura.codigos.length} juntos=$grupo '
         '${tamanoCodigo(v)} imagen=${captura.imagen.width.toInt()}x${captura.imagen.height.toInt()}'
         '${i == null ? '' : ' brillo=${i.brillo} nitidez=${i.nitidez} reflejo=${i.quemados}% '
-            'motor=${i.microsegundos ~/ 1000}ms hilos=${i.hilos}'}');
+            'motor=${i.microsegundos ~/ 1000}ms hilos=${i.hilos}'
+            '${i.regiones >= 0 ? ' opencv_ubico=${i.regiones}' : ''}'}');
   }
 
   /// Pitido, vibracion y resaltado (uno por lectura o por grupo de lecturas).

@@ -319,6 +319,14 @@ extern "C" void ml_configurar(int32_t hilos) { gHilos = std::max(0, (int)hilos);
 
 extern "C" void ml_configurar_detector(int32_t activo) { gDetector = activo != 0; }
 
+extern "C" int32_t ml_con_opencv(void) {
+#ifdef ML_CON_OPENCV
+  return 1;
+#else
+  return 0;
+#endif
+}
+
 extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, int32_t bytes_por_fila,
                            int32_t formato_pixel, int32_t formatos, int32_t modo, int32_t presupuesto_us,
                            int32_t ronda, ml_codigo* salida, int32_t max_salida, ml_info* info) {
@@ -411,7 +419,12 @@ extern "C" int32_t ml_leer(const uint8_t* datos, int32_t ancho, int32_t alto, in
     // Con el detector: si leyo todo lo que ubico, no hace falta mas.
     const bool detectorCompleto = conDetector && t->regiones.load() > 0 && delRapido >= t->regiones.load();
     const bool rapidoAlcanza = t->lector.multiple && delRapido > 0 && (ronda % 3 != 0 || detectorCompleto);
-    if (t->lector.listo() || rapidoAlcanza || (modo & ML_MODO_SOLO_RAPIDO)) {
+    // Intercalado: un cuadro liviano (solo rapido, y el detector si se buscan
+    // todos) y uno con los pasos dificiles. En el telefono los codigos reales
+    // los leia sobre todo el rapido apenas la imagen salia nitida, y correr
+    // los dificiles en cada cuadro bajaba la camara de 20 a 7 cuadros/s.
+    const bool liviano = (modo & ML_MODO_INTERCALAR) && ronda % 2 == 1;
+    if (t->lector.listo() || rapidoAlcanza || liviano || (modo & ML_MODO_SOLO_RAPIDO)) {
       info->siguiente_ronda = ronda + 1;
     } else if (hilos > 1) {
       // En paralelo: todos los pasos dificiles a la vez, repartidos en los

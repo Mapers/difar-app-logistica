@@ -48,6 +48,9 @@ abstract final class ModoMotor {
 
   /// Solo el paso rapido (camara sin disparar: ahorra bateria).
   static const soloRapido = 4;
+
+  /// Cuadros impares solo el paso rapido: mas cuadros por segundo.
+  static const intercalar = 8;
 }
 
 /// Paso del motor que logro la lectura (ML_PASO_*).
@@ -59,7 +62,9 @@ enum PasoMotor {
   reflejos('reflejos/sombras'),
   ampliado('ampliado'),
   invertido('invertido'),
-  rotado('rotado');
+  rotado('rotado'),
+  detector('detector'),
+  detectorPreparado('detector+contraste');
 
   const PasoMotor(this.nombre);
   final String nombre;
@@ -102,6 +107,7 @@ class InfoMotor {
     this.nitidez = 0,
     this.ilegibles = 0,
     this.hilos = 0,
+    this.regiones = -1,
   });
 
   /// 0..255, promedio del centro del cuadro.
@@ -126,6 +132,9 @@ class InfoMotor {
 
   /// Hilos usados en los pasos dificiles (1 = uno tras otro).
   final int hilos;
+
+  /// Codigos 1D que ubico el detector de OpenCV (-1 = no corrio).
+  final int regiones;
 }
 
 class ResultadoMotor {
@@ -138,7 +147,7 @@ class ResultadoMotor {
 // ------------------------------------------------------------------ FFI
 
 const _maxSalida = 64;
-const _pasos = 8; // ML_PASOS
+const _pasos = 10; // ML_PASOS
 
 final class _MlCodigo extends Struct {
   @Int32()
@@ -180,6 +189,8 @@ final class _MlInfo extends Struct {
   external int ilegibles;
   @Int32()
   external int hilos;
+  @Int32()
+  external int regiones;
 }
 
 typedef _LeerC = Int32 Function(Pointer<Uint8>, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32,
@@ -215,6 +226,12 @@ String _cadena(Array<Uint8> a, int largo) {
 void configurarHilos(int hilos, {String? biblioteca}) {
   final lib = biblioteca == null ? _abrir() : DynamicLibrary.open(biblioteca);
   lib.lookupFunction<_ConfigurarC, _ConfigurarDart>('ml_configurar')(hilos);
+}
+
+/// Si la biblioteca trae OpenCV (detector de codigos 1D).
+bool motorConOpenCV({String? biblioteca}) {
+  final lib = biblioteca == null ? _abrir() : DynamicLibrary.open(biblioteca);
+  return lib.lookupFunction<Int32 Function(), int Function()>('ml_con_opencv')() == 1;
 }
 
 /// Memoria nativa reutilizada entre cuadros (una por isolate).
@@ -292,6 +309,7 @@ ResultadoMotor leerCuadro(
       nitidez: i.nitidez,
       ilegibles: i.ilegibles,
       hilos: i.hilos,
+      regiones: i.regiones,
       tiempoPorPaso: {
         for (var p = 1; p < _pasos && p < PasoMotor.values.length; p++)
           if (i.tiempoPasoUs[p] > 0) PasoMotor.values[p]: i.tiempoPasoUs[p],

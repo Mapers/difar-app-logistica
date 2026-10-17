@@ -21,9 +21,12 @@ enum Simbologia {
   final String nombre;
   final int bitMotor;
 
-  /// Sin digito de control obligatorio: un pedazo del codigo tambien
-  /// "decodifica". Se exige leerlos igual en 2 cuadros seguidos.
-  bool get sinControl => this == itf || this == code39 || this == codabar || this == code93;
+  /// Se exige leerlos igual en 2 cuadros seguidos: ITF, Code 39/93 y Codabar
+  /// no tienen digito de control obligatorio (un pedazo del codigo tambien
+  /// "decodifica"), y en el telefono salieron Code 128 sospechosos
+  /// ($1PJN7B$0 / $1PKN7B$0 / $1PIN81J0 del mismo codigo).
+  bool get sinControl =>
+      this == itf || this == code39 || this == codabar || this == code93 || this == code128;
 
   static Simbologia? deMotor(int bit) {
     for (final s in values) {
@@ -37,6 +40,7 @@ enum Simbologia {
 /// Grupos de simbologias. Leer solo las que se usan es lo que mas acelera
 /// la deteccion: el motor prueba menos formatos por cuadro.
 enum GrupoFormatos {
+  todos('Automatico: todos los formatos', []),
   productos('Productos (EAN / UPC)', [Simbologia.ean13, Simbologia.ean8, Simbologia.upcA, Simbologia.upcE]),
   logistica('Logistica (1D: EAN, Code 128, ITF...)', [
     Simbologia.ean13,
@@ -49,8 +53,7 @@ enum GrupoFormatos {
     Simbologia.itf,
     Simbologia.codabar,
   ]),
-  dosD('2D (QR, DataMatrix, PDF417)', [Simbologia.qr, Simbologia.dataMatrix, Simbologia.pdf417, Simbologia.aztec]),
-  todos('Todos los formatos', []);
+  dosD('2D (QR, DataMatrix, PDF417)', [Simbologia.qr, Simbologia.dataMatrix, Simbologia.pdf417, Simbologia.aztec]);
 
   const GrupoFormatos(this.etiqueta, this.simbologias);
 

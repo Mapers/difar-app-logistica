@@ -27,7 +27,7 @@ void main() {
   testWidgets('ajustes guarda el grupo de formatos', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final a = Ajustes(await SharedPreferences.getInstance());
-    expect(a.grupo, GrupoFormatos.logistica);
+    expect(a.grupo, GrupoFormatos.todos); // automatico por defecto
 
     await tester.pumpWidget(MaterialApp(home: PantallaAjustes(ajustes: a)));
     await tester.tap(find.text(GrupoFormatos.productos.etiqueta));

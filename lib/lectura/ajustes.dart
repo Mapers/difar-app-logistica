@@ -11,7 +11,8 @@ class Ajustes extends ChangeNotifier {
 
   GrupoFormatos get grupo => GrupoFormatos.values.firstWhere(
         (g) => g.name == _prefs?.getString('grupo'),
-        orElse: () => GrupoFormatos.logistica,
+        // Por defecto reconoce cualquier tipo de codigo, sin elegir nada.
+        orElse: () => GrupoFormatos.todos,
       );
   set grupo(GrupoFormatos v) => _set(() => _prefs?.setString('grupo', v.name));
 

@@ -28,6 +28,8 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // Solo telefonos de 64 bits: el motor trae OpenCV solo para arm64.
+        ndk { abiFilters += listOf("arm64-v8a") }
     }
 
     buildTypes {

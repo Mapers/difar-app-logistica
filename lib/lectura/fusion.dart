@@ -60,7 +60,7 @@ Offset aVertical(Offset p, Size sensor, int giro) => switch (giro % 360) {
 ///   codigo). Lo leido sobre la imagen original entra al instante.
 class Fusion {
   /// Pasos que leen la imagen original, sin prepararla (PasoMotor.nombre).
-  static const _pasosDirectos = {'rapido', 'completo', 'invertido', ''};
+  static const _pasosDirectos = {'rapido', 'completo', 'invertido', 'detector', ''};
 
   int _cuadro = 0;
   final _visto = <String, int>{};

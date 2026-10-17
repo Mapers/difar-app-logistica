@@ -43,6 +43,7 @@ extern "C" {
 #define ML_MODO_TODOS 1           // todos los codigos (no cortar con el primero)
 #define ML_MODO_CUADRO_COMPLETO 2 // todo el cuadro (si no, la zona central)
 #define ML_MODO_SOLO_RAPIDO 4     // solo el paso rapido (camara sin disparar: ahorra bateria)
+#define ML_MODO_INTERCALAR 8      // cuadros impares ([ronda]) solo el rapido: mas cuadros por segundo
 
 // Paso que logro la lectura (para el registro y para afinar).
 #define ML_PASO_RAPIDO 1     // zona central (75%), sin preparar
@@ -88,6 +89,9 @@ FFI_PLUGIN_EXPORT void ml_configurar(int32_t hilos);
 // Detector de OpenCV (ubica cada codigo 1D, lo recorta y endereza): 1 = si,
 // 0 = no. Solo si la biblioteca se compilo con OpenCV (ML_CON_OPENCV).
 FFI_PLUGIN_EXPORT void ml_configurar_detector(int32_t activo);
+
+// 1 si la biblioteca se compilo con OpenCV (detector de codigos 1D).
+FFI_PLUGIN_EXPORT int32_t ml_con_opencv(void);
 
 // Lee los codigos de un cuadro. Devuelve cuantos escribio en [salida].
 // [modo]: ML_MODO_* combinados. Con ML_MODO_TODOS junta lo que lea cada

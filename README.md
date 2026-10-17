@@ -1,8 +1,10 @@
 # DIFAR Logistica — lector rapido de codigos de barras (Flutter)
 
-App de lectura de codigos de barras al estilo Scandit, **solo Android**, con
-**motor de lectura propio** (`packages/motor_lector`, C++ por FFI): zxing-cpp
-como decodificador + preparacion de imagen por pasos para codigos dificiles
+App de lectura de codigos de barras al estilo Scandit, **solo Android de 64
+bits (arm64-v8a)**, con **motor de lectura propio** (`packages/motor_lector`,
+C++ por FFI): **OpenCV** ubica cada codigo 1D del cuadro (con su angulo), se
+recorta, se endereza y **zxing-cpp** lo decodifica, todos en paralelo; mas
+preparacion de imagen por pasos para codigos dificiles
 (sin luz, reflejos en botellas, bolsas arrugadas, impresion invertida,
 girados, chicos). **Los pasos corren en paralelo en varios nucleos**: en cada
 cuadro se prueban todos a la vez y se devuelve apenas uno lee. En un banco de
@@ -63,13 +65,19 @@ igual en 2 cuadros seguidos para contarse (`lib/lectura/fusion.dart`).
 ## Correrlo
 
 ```bash
+ANDROID_HOME=/ruta/sdk scripts/preparar_opencv.sh   # una vez: OpenCV minimo para arm64 (~10 min)
 flutter pub get
 flutter run                      # telefono conectado (la camara no funciona en emulador)
 flutter build apk --release      # APK en build/app/outputs/flutter-apk/
 flutter test
 ```
 
-Android minimo: 6.0 (API 23). iOS: el permiso de camara ya esta en `Info.plist`.
+Android minimo: 6.0 (API 23), solo 64 bits. Sin `preparar_opencv.sh` el motor
+compila igual, sin el detector de OpenCV.
+
+Formatos: por defecto **automatico** (todos: EAN, UPC, Code 128/39/93, ITF,
+Codabar, QR, DataMatrix, PDF417, Aztec). Al disparar se enfoca el centro y,
+si la imagen sigue borrosa, se vuelve a enfocar y se pide quietud.
 
 ## Estructura
 
